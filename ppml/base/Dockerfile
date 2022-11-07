@@ -32,6 +32,13 @@ ADD ./_dill.py.patch /_dill.py.patch
 ADD ./python-uuid.patch /python-uuid.patch
 ADD ./python-pslinux.patch /python-pslinux.patch
 
+ADD ./maa/common_manifest_sgx_parser.patch /common_manifest_sgx_parser.patch
+ADD ./maa/pal_linux.patch /pal_linux.patch
+ADD ./maa/sgx_sign.patch /sgx_sign.patch
+ADD ./maa/tools.sgx.ra-tls.meson.patch /tools.sgx.ra-tls.meson.patch
+ADD ./maa/ra_tls.patch /ra_tls.patch
+ADD ./maa/ra_tls_verify_maa.c /ra_tls_verify_maa.c
+
 # Python3.7
 RUN env DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt install software-properties-common -y && \
@@ -53,6 +60,12 @@ RUN env DEBIAN_FRONTEND=noninteractive apt-get update && \
     git clone https://github.com/intel/SGXDataCenterAttestationPrimitives.git /opt/intel/SGXDataCenterAttestationPrimitives && \
     cd /gramine && \
     git checkout devel-v1.3.1-2022-10-08 && \
+    patch ./pal/src/host/linux-sgx/common_manifest_sgx_parser.c /common_manifest_sgx_parser.patch && \
+    patch ./pal/src/host/linux-sgx/pal_linux.h /pal_linux.patch && \
+    patch ./python/graminelibos/sgx_sign.py /sgx_sign.patch && \
+    patch ./tools/sgx/ra-tls/meson.build /tools.sgx.ra-tls.meson.patch && \
+    patch ./tools/sgx/ra-tls/ra_tls.h /ra_tls.patch && \
+    cp /ra_tls_verify_maa.c ./tools/sgx/ra-tls/ && \
     meson setup build/ --buildtype=release  -Dsgx=enabled   -Dsgx_driver=dcap1.10 && \
     ninja -C build/ && \
     ninja -C build/ install && \

@@ -1,0 +1,3 @@
+466a467,468
+>         elif attestation_type == "maa":
+>             print('    MAA (Microsoft Azure Attestation)')

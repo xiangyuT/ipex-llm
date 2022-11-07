@@ -1,0 +1,7 @@
+47c47,48
+<     SGX_ATTESTATION_DCAP
+---
+>     SGX_ATTESTATION_DCAP,
+>     SGX_ATTESTATION_MAA
+54a56
+>         case SGX_ATTESTATION_MAA: return "maa";
