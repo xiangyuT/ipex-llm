@@ -14,16 +14,13 @@
 # limitations under the License.
 #
 
-from collections import namedtuple
 import torch
 import pytorch_lightning as pl
 from torch import nn
-import subprocess
-from importlib.util import find_spec
 import time
 import numpy as np
 from copy import deepcopy
-from typing import Dict, Callable, Tuple, Optional, List, Set, Union
+from typing import Dict, Callable, Tuple, Optional, List, Set, Union, Sequence
 from torch.utils.data import DataLoader
 from torchmetrics.metric import Metric
 from bigdl.nano.utils.inference.common.checker import available_acceleration_combination
@@ -39,6 +36,9 @@ from bigdl.nano.deps.neural_compressor.inc_api import quantize as inc_quantize
 from bigdl.nano.utils.inference.pytorch.model import AcceleratedLightningModule
 from bigdl.nano.utils.inference.pytorch.model_utils import get_forward_args, get_input_example
 from bigdl.nano.utils.inference.pytorch.metrics import NanoMetric
+from bigdl.nano.utils.inference.pytorch.dataset import RepeatDataset, remove_batch_dim_fn
+from bigdl.nano.utils.inference.pytorch.dataloader import\
+    transform_multiple_input_dataloader_to_inc_mode
 from bigdl.nano.pytorch.utils import TORCH_VERSION_LESS_1_10, save_model, load_model
 from torchmetrics import Metric
 import warnings
@@ -77,8 +77,9 @@ class InferenceOptimizer(BaseInferenceOptimizer):
         }
 
     def optimize(self, model: nn.Module,
-                 training_data: DataLoader,
-                 validation_data: Optional[DataLoader] = None,
+                 training_data: Union[DataLoader, torch.Tensor, Tuple[torch.Tensor]],
+                 validation_data:
+                     Optional[Union[DataLoader, torch.Tensor, Tuple[torch.Tensor]]] = None,
                  input_sample: Union[torch.Tensor, Dict, Tuple[torch.Tensor], None] = None,
                  metric: Optional[Callable] = None,
                  direction: str = "max",
@@ -98,16 +99,33 @@ class InferenceOptimizer(BaseInferenceOptimizer):
         and "onnxruntime_int8_integer".
 
         :param model: A torch.nn.Module to be optimized
-        :param training_data: A torch.utils.data.dataloader.DataLoader object for training
-               dataset. Users should be careful with this parameter since this dataloader
-               might be exposed to the model, which causing data leak. The
-               batch_size of this dataloader is important as well, users may
-               want to set it to the same batch size you may want to use the model
-               in real deploy environment. E.g. batch size should be set to 1
-               if you would like to use the accelerated model in an online service.
-        :param validation_data: (optional) A torch.utils.data.dataloader.DataLoader object
-               for accuracy evaluation. This is only needed when users care about the possible
-               accuracy drop.
+        :param training_data: training_data support following formats:
+
+                | 1. a torch.utils.data.dataloader.DataLoader object for training dataset.
+                | Users should be careful with this parameter since this dataloader
+                | might be exposed to the model, which causing data leak. The
+                | batch_size of this dataloader is important as well, users may
+                | want to set it to the same batch size you may want to use the model
+                | in real deploy environment. E.g. batch size should be set to 1
+                | if you would like to use the accelerated model in an online service.
+                |
+                | 2. a single torch.Tensor which used for training, this case is used to
+                | accept single sample input x.
+                |
+                | 3. a tuple of torch.Tensor which used for training, this case is used to
+                | accept single sample input (x, y) or (x1, x2) et al.
+
+        :param validation_data: (optional) validation_data is only needed when users care
+                                about the possible accuracy drop. It support following formats:
+
+                | 1. a torch.utils.data.dataloader.DataLoader object for accuracy evaluation.
+                |
+                | 2. a single torch.Tensor which used for training, this case is used to
+                | accept single sample input x.
+                |
+                | 3. a tuple of torch.Tensor which used for training, this case is used to
+                | accept single sample input (x, y) or (x1, x2) et al.
+
         :param input_sample: (optional) A set of inputs for trace, defaults to None.
                In most cases, you don't need specify this parameter, it will be obtained from
                training_data.
@@ -167,7 +185,23 @@ class InferenceOptimizer(BaseInferenceOptimizer):
 
         if input_sample is None:
             forward_args = get_forward_args(model)
-            input_sample = get_input_example(model, training_data, forward_args)
+            if isinstance(training_data, DataLoader):
+                input_sample = get_input_example(model, training_data, forward_args)
+            else:
+                if isinstance(training_data, Sequence):
+                    input_sample = tuple(list(training_data)[:len(forward_args)])
+                else:
+                    input_sample = training_data
+                # turn training_data into dataset
+                dataset = RepeatDataset(sample=training_data, num=1)
+                training_data = DataLoader(dataset, batch_size=1)
+                training_data = remove_batch_dim_fn(training_data)
+                if validation_data is not None and not isinstance(validation_data, DataLoader):
+                    # turn validation_data into dataset
+                    val_dataset = RepeatDataset(sample=validation_data, num=1)
+                    validation_data = DataLoader(val_dataset, batch_size=1)
+                    validation_data = remove_batch_dim_fn(validation_data)
+
         st = time.perf_counter()
         try:
             with torch.no_grad():
@@ -419,6 +453,10 @@ class InferenceOptimizer(BaseInferenceOptimizer):
                 invalidInputError(False,
                                   "Accelerator {} is invalid for BF16.".format(accelerator))
         if precision == 'int8':
+            # transform the dataloader to inc mode
+            inc_calib_dataloader =\
+                transform_multiple_input_dataloader_to_inc_mode(model,
+                                                                calib_dataloader)
             if not accelerator or accelerator == 'onnxruntime':
                 method_map = {
                     None: {
@@ -460,7 +498,7 @@ class InferenceOptimizer(BaseInferenceOptimizer):
                 model which is able to run on Pytorch or ONNXRuntime can be fetched by
                 `quantized_model.model`.
                 """
-                return inc_quantize(model, calib_dataloader, metric,
+                return inc_quantize(model, inc_calib_dataloader, metric,
                                     framework=framework,
                                     conf=conf,
                                     approach=approach,
