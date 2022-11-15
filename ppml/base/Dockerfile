@@ -66,7 +66,7 @@ RUN env DEBIAN_FRONTEND=noninteractive apt-get update && \
     patch ./tools/sgx/ra-tls/meson.build /tools.sgx.ra-tls.meson.patch && \
     patch ./tools/sgx/ra-tls/ra_tls.h /ra_tls.patch && \
     cp /ra_tls_verify_maa.c ./tools/sgx/ra-tls/ && \
-    meson setup build/ --buildtype=release  -Dsgx=enabled   -Dsgx_driver=dcap1.10 && \
+    meson setup build/ --buildtype=release  -Dsgx=enabled   -Dsgx_driver=dcap1.10 -Ddcap=enabled && \
     ninja -C build/ && \
     ninja -C build/ install && \
     cd /ppml/ && \
