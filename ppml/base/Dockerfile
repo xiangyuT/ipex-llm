@@ -53,6 +53,20 @@ RUN env DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt-get update --fix-missing && \
     env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y apt-utils wget unzip protobuf-compiler && \
     pip install --no-cache-dir meson==0.63.2 cmake==3.24.1.1 toml==0.10.2 pyelftools cffi dill==0.3.4 psutil && \
+# Install sgxsdk and dcap, which is used for remote attestation
+    mkdir -p /opt/intel/ && \
+    cd /opt/intel && \
+    wget https://download.01.org/intel-sgx/sgx-dcap/1.13/linux/distro/ubuntu20.04-server/sgx_linux_x64_sdk_2.16.100.4.bin && \
+    chmod a+x ./sgx_linux_x64_sdk_2.16.100.4.bin && \
+    printf "no\n/opt/intel\n"|./sgx_linux_x64_sdk_2.16.100.4.bin && \
+    . /opt/intel/sgxsdk/environment && \
+    cd /opt/intel && \
+    wget https://download.01.org/intel-sgx/sgx-dcap/1.13/linux/distro/ubuntu20.04-server/sgx_debian_local_repo.tgz && \
+    tar xzf sgx_debian_local_repo.tgz && \
+    echo 'deb [trusted=yes arch=amd64] file:///opt/intel/sgx_debian_local_repo focal main' | tee /etc/apt/sources.list.d/intel-sgx.list && \
+    wget -qO - https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | apt-key add - && \
+    apt-get update && \
+    apt-get install -y libsgx-enclave-common-dev  libsgx-ae-qe3 libsgx-ae-qve libsgx-urts libsgx-dcap-ql libsgx-dcap-default-qpl libsgx-dcap-quote-verify-dev libsgx-dcap-ql-dev libsgx-dcap-default-qpl-dev libsgx-quote-ex-dev libsgx-uae-service libsgx-ra-network libsgx-ra-uefi && \
 # Create a link to cmake, upgrade cmake version so that it is compatible with latest meson build (require version >= 3.17)
     ln -s /usr/local/bin/cmake /usr/bin/cmake && \
     env DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential autoconf bison gawk git ninja-build python3-click python3-jinja2 wget pkg-config cmake libcurl4-openssl-dev libprotobuf-c-dev protobuf-c-compiler python3-cryptography python3-pip python3-protobuf nasm && \
@@ -85,20 +99,6 @@ RUN env DEBIAN_FRONTEND=noninteractive apt-get update && \
     chmod a+x /ppml/init.sh && \
     chmod a+x /ppml/clean.sh && \
     chmod +x /ppml/verify-attestation-service.sh && \
-# Install sgxsdk and dcap, which is used for remote attestation
-    mkdir -p /opt/intel/ && \
-    cd /opt/intel && \
-    wget https://download.01.org/intel-sgx/sgx-dcap/1.13/linux/distro/ubuntu20.04-server/sgx_linux_x64_sdk_2.16.100.4.bin && \
-    chmod a+x ./sgx_linux_x64_sdk_2.16.100.4.bin && \
-    printf "no\n/opt/intel\n"|./sgx_linux_x64_sdk_2.16.100.4.bin && \
-    . /opt/intel/sgxsdk/environment && \
-    cd /opt/intel && \
-    wget https://download.01.org/intel-sgx/sgx-dcap/1.13/linux/distro/ubuntu20.04-server/sgx_debian_local_repo.tgz && \
-    tar xzf sgx_debian_local_repo.tgz && \
-    echo 'deb [trusted=yes arch=amd64] file:///opt/intel/sgx_debian_local_repo focal main' | tee /etc/apt/sources.list.d/intel-sgx.list && \
-    wget -qO - https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | apt-key add - && \
-    apt-get update && \
-    apt-get install -y libsgx-enclave-common-dev  libsgx-ae-qe3 libsgx-ae-qve libsgx-urts libsgx-dcap-ql libsgx-dcap-default-qpl libsgx-dcap-quote-verify-dev libsgx-dcap-ql-dev libsgx-dcap-default-qpl-dev libsgx-quote-ex-dev libsgx-uae-service libsgx-ra-network libsgx-ra-uefi && \
 # java
     cd /opt && \
     wget $JDK_URL && \
