@@ -232,7 +232,7 @@ RUN rm $SPARK_HOME/jars/okhttp-*.jar && \
     apt install -y az-dcap-client && \
     curl -sL https://aka.ms/InstallAzureCLIDeb | bash && \
     apt-get install bsdmainutils && \
-    curl -LO https://dl.k8s.io/release/v1.25.0/bin/linux/amd64/kubectl  && \
+    curl -LO https://dl.k8s.io/release/v1.23.1/bin/linux/amd64/kubectl  && \
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
 ADD azure /ppml/azure
 RUN chmod a+x /ppml/azure/create-aks.sh && \
