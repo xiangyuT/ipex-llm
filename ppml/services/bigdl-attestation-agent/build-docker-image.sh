@@ -1,5 +1,5 @@
 export IMAGE_NAME=xiangyut/test-image
-export IMAGE_VERSION=bigdl-aa-0712
+export IMAGE_VERSION=bigdl-aa-0720
 
 sudo docker build \
     --build-arg http_proxy=http://child-prc.intel.com:913 \

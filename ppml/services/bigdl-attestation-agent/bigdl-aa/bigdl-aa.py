@@ -5,7 +5,6 @@ import ssl, os
 import base64
 
 app = Flask(__name__)
-app.config.from_pyfile("config.cfg")
 
 # 生成自签名的SSL证书
 context = ssl.SSLContext(ssl.PROTOCOL_TLS)
@@ -18,6 +17,11 @@ def load_config():
     app.config['as_url'] = config.get('BIGDL_AS', 'as_url')
     app.config['as_app_id'] = config.get('BIGDL_AS', 'as_app_id')
     app.config['as_api_key'] = config.get('BIGDL_AS', 'as_api_key')
+    app.config['policy_id'] = config.get('BIGDL_AS', 'policy_id')
+    if app.config['policy_id'] is None:
+        app.config['policy_id'] = ""
+    app.config['launchtime_attest'] = config.get('BIGDL_AS', 'launchtime_attest')
+    app.config['runtime_attest'] = config.get('BIGDL_AS', 'runtime_attest')
 
 load_config()
 
@@ -38,7 +42,7 @@ def verify_quote():
     as_app_id = app.config['as_app_id']
     as_api_key = app.config['as_api_key']
     quote = data.get('quote')
-    policy_id = data.get('policy_id')
+    policy_id = app.config['policy_id']
     if policy_id is None:
         policy_id = ''
     
@@ -55,7 +59,7 @@ def attest():
     user_report_data = data.get('user_report_data')
     quote_b = quote_generator.generate_tdx_quote(user_report_data)
     quote = base64.b64encode(quote_b).decode('utf-8')
-    policy_id = data.get('policy_id')
+    policy_id = app.config['policy_id']
     if policy_id is None:
         policy_id = ''
     result = attestation_service.bigdl_attestation_service(as_url, as_app_id, as_api_key, quote_b, policy_id)
@@ -66,8 +70,27 @@ def attest():
 def load_data():
     raise "TODO"
 
+def attest_for_entrypoint():
+    as_url = app.config['as_url']
+    as_app_id = app.config['as_app_id']
+    as_api_key = app.config['as_api_key']
+    quote_b = quote_generator.generate_tdx_quote("")
+    policy_id = app.config['policy_id']
+    result = attestation_service.bigdl_attestation_service(as_url, as_app_id, as_api_key, quote_b, policy_id)
+    return result
+
 if __name__ == '__main__':
     if not os.path.exists("/dev/tdx-guest"):
-        print("TDX device 'tdx-guest' not found, service stopped.")
-        exit
-    app.run(host='127.0.0.1', port=9870, ssl_context=context)
+        print("BigDL-AA: TDX device 'tdx-guest' not found, service stopped.")
+        exit(1)
+    if app.config['launchtime_attest'] == "true":
+        ret = attest_for_entrypoint()
+        if ret < 0 :
+            print("BigDL-AA: Attestation failed, service stopped.")
+            exit(1)
+        else:
+            print("BigDL-AA: Attestation success!")
+    
+    if app.config['runtime_attest'] == "true":
+        print("BigDL-AA: Agent Started.")
+        app.run(host='127.0.0.1', port=9870, ssl_context=context)

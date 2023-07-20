@@ -30,18 +30,20 @@ RUN apt install -y python3-minimal && \
     pip3 install --upgrade pip && \
     pip install setuptools==58.4.0 flask requests pyopenssl
 
-# BigDL Python Lib
-RUN mkdir /ppml && \
-    cd /ppml/ && \
-    git clone https://github.com/intel-analytics/BigDL.git && \
-    cd BigDL && \
-    mkdir -p /ppml/bigdl-ppml/ && \
-    cp -r /ppml/BigDL/python/ppml/src/ /ppml/bigdl-ppml && \
-    rm -rf /ppml/BigDL
+# # BigDL Python Lib
+# RUN mkdir /ppml && \
+#     cd /ppml/ && \
+#     git clone https://github.com/intel-analytics/BigDL.git && \
+#     cd BigDL && \
+#     mkdir -p /ppml/bigdl-ppml/ && \
+#     cp -r /ppml/BigDL/python/ppml/src/ /ppml/bigdl-ppml && \
+#     rm -rf /ppml/BigDL
 
 ENV PYTHONPATH   /usr/lib/python3.9:/usr/lib/python3.9/lib-dynload:/usr/local/lib/python3.9/dist-packages:/usr/lib/python3/dist-packages:/ppml/bigdl-ppml/src
 
 ADD ./bigdl-aa /ppml/bigdl-aa
+ADD ./entrypoint.sh /ppml/entrypoint.sh
+RUN chmod +x /ppml/entrypoint.sh
 
 WORKDIR /ppml
-ENTRYPOINT [ "/bin/bash" ]
+ENTRYPOINT [ "/ppml/entrypoint.sh" ]
