@@ -88,11 +88,12 @@ object BigDLRemoteAttestationService {
   }
 
   def registerPolicy(msg: String): Route = {
+    val appID = JsonUtil.fromJson(classOf[Enroll], msg).appID
     val policyType = JsonUtil.fromJson(classOf[PolicyBase], msg).policyType
     val curPolicy = policyType match {
       case "SGXMREnclavePolicy" =>
         JsonUtil.fromJson(classOf[SGXMREnclavePolicy], msg)
-      case "SGXMRSignerPolicy" =>
+      case "SGXMRSignerPolicy" =>Copy of How to deploy attestation environment for SBX (pre-production)
         JsonUtil.fromJson(classOf[SGXMRSignerPolicy], msg)
       case "SGXReportDataPolicy" =>
         JsonUtil.fromJson(classOf[SGXReportDataPolicy], msg)
@@ -108,6 +109,12 @@ object BigDLRemoteAttestationService {
     if (curPolicy == null) {
       complete(400, "Unsupported policy type.")
     } else {
+      val latestPolicyID = s"${appID}-latest"
+      if (policyMap.contains(latestPolicyID)) {
+        map.update(latestPolicyID, curPolicy)
+      } else {
+        map += (latestPolicyID -> curPolicy)
+      }
       val policyID = UUID.randomUUID.toString
       policyMap += (policyID -> curPolicy)
       val res = JsonUtil.toJson(Map("policyID" -> policyID))
@@ -123,13 +130,16 @@ object BigDLRemoteAttestationService {
       val res = "{\"result\":\"" + verifyQuoteResult.toString() + "\"}"
       complete(400, res)
     } else {
+      val appID = JsonUtil.fromJson(classOf[Enroll], msg).appID
       val curPolicyID = JsonUtil.fromJson(classOf[PolicyBase], msg).policyID
       if (curPolicyID == null) {
         val res = "{\"result\":" + verifyQuoteResult.toString() + "}"
         complete(200, res)
       } else {
-        val curPolicy = policyMap.get(curPolicyID)
-        val appID = JsonUtil.fromJson(classOf[Enroll], msg).appID
+        val curPolicy = curPolicyID match {
+          case "latest" => policyMap.get(s"${appID}-latest")
+          case _ => policyMap.get(curPolicyID)
+        } 
         curPolicy match {
           case Some(SGXMREnclavePolicy(policyAppID, policyMREnclave)) =>
             val mrEnclave = AttestationUtil.getMREnclaveFromQuote(quote)
@@ -303,7 +313,7 @@ object BigDLRemoteAttestationService {
             logger.info("registerPolicy\n")
             val enroll = JsonUtil.fromJson(classOf[Enroll], jsonMsg)
             if (checkAppIDAndApiKey(enroll)) {
-              registerPolicy(jsonMsg)
+              registerPolicy(jsonMsg, enroll.appID)
             } else {
               complete(400, "Invalid app_id and api_key.")
             }
