@@ -116,8 +116,8 @@ object BigDLKeyManagementServer extends Supportive {
                     "wrong primary key")
                   val primaryKeyPlainText = BigDLKMServerUtil.decryptKey(rootKey,
                     encryptedPrimaryKey)
-                  val base64AES128Key = BigDLKMServerUtil.generateAESKey(128)
-                  BigDLKMServerUtil.encryptKey(primaryKeyPlainText, base64AES128Key)
+                  val base64AES256Key = BigDLKMServerUtil.generateAESKey(256)
+                  BigDLKMServerUtil.encryptKey(primaryKeyPlainText, base64AES256Key)
                 }
                 BigDLKMServerUtil.saveKey2DB(user, dataKeyName, encryptedDataKey, url)
                 complete(s"dataKey [$dataKeyName] is generated successfully!")
