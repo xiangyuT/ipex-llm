@@ -61,9 +61,11 @@ IS_SPR = is_spr()
 TORCH_LINEAR_THRESHOLD = 96
 SYM_INT4 = ggml_tensor_qtype["sym_int4"]
 SYM_INT8 = ggml_tensor_qtype["sym_int8"]
+NF4 = ggml_tensor_qtype["nf4"]
 
 
-def ggml_convert_qtype(tensor: torch.Tensor, qtype: int, device=None):
+def ggml_convert_qtype(tensor: torch.Tensor, qtype: int,
+                       device=None, convert_shape_only=False):
     QK = ggml.ggml_qk_size(qtype)
     block_size_in_bytes = ggml.ggml_type_size(qtype)
 
@@ -82,7 +84,7 @@ def ggml_convert_qtype(tensor: torch.Tensor, qtype: int, device=None):
     dst_tensor = torch.empty(dst_size, dtype=torch.uint8,
                              device=device)
 
-    if device != 'meta':
+    if not convert_shape_only and device != 'meta':
         dst = ctypes.c_void_p(dst_tensor.data.data_ptr())
         hist = (ctypes.c_int64 * 16)()
         ggml.ggml_quantize_tensor(src, dst, qtype, n, k, hist)
@@ -99,7 +101,7 @@ def ggml_q_format_convet_cpu2xpu(tensor: torch.Tensor, num_elem: int, qtype: int
 
     src = ctypes.c_void_p(tensor.data.data_ptr())
 
-    if qtype in [SYM_INT4, SYM_INT8]:
+    if qtype in [SYM_INT4, SYM_INT8, NF4]:
         dst_tensor = torch.empty_like(tensor)
     elif qtype == ggml_tensor_qtype["sym_int5"]:
         QK = ggml.ggml_qk_size(qtype)
@@ -124,7 +126,7 @@ def ggml_q_format_convet_xpu2cpu(tensor: torch.Tensor, num_elem: int, qtype: int
 
     src = ctypes.c_void_p(tensor.data.data_ptr())
 
-    if qtype in [SYM_INT4, SYM_INT8]:
+    if qtype in [SYM_INT4, SYM_INT8, NF4]:
         dst_tensor = torch.empty_like(tensor)
     elif qtype == ggml_tensor_qtype["sym_int5"]:
         QK = ggml.ggml_qk_size(ggml_tensor_qtype["asym_int5"])
@@ -161,6 +163,7 @@ class FP4Params(torch.nn.Parameter):
                 requires_grad=False,
                 quantized=False,
                 _shape=None,
+                convert_shape_only=False,
                 qtype=None):
         if data is None:
             data = torch.empty(0)
@@ -170,13 +173,15 @@ class FP4Params(torch.nn.Parameter):
         self.quantized = quantized
         self._shape = _shape
         self.qtype = qtype
+        self.convert_shape_only = convert_shape_only
         return self
 
     def quantize(self, device=None):
         if not self.quantized:
             w = self.data.contiguous().float()
             w_quantized = ggml_convert_qtype(w, self.qtype,
-                                             device=device)
+                                             device=device,
+                                             convert_shape_only=self.convert_shape_only)
             self.data = w_quantized
             self.quantized = True
             self._shape = w.shape
