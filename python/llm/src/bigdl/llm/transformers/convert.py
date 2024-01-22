@@ -202,9 +202,7 @@ def _replace_with_low_bit_linear(model, qtype, modules_to_not_convert=None,
         is_linear, linear_args = is_linear_module(module)
         if is_linear and name not in modules_to_not_convert:
             # Check if the current key is not in the `modules_to_not_convert`
-            if (not any(key in ".".join(current_key_name) for key in modules_to_not_convert) and
-                    module.weight.data.device.type != 'meta' and
-                    not isinstance(module, LowBitLinear)):
+            if not any(key in ".".join(current_key_name) for key in modules_to_not_convert):
                 in_features, out_features, mp_group = linear_args
                 with init_empty_weights():
                     new_linear = None
@@ -531,7 +529,7 @@ def ggml_convert_low_bit(model, qtype, optimize_model=True,
         pass
 
     if optimize_model:
-        model = _optimize_post(model, lightweight_bmm)
+        model = _optimize_post(model, lightweight_bmm, qtype)
     return model
 
 
@@ -554,6 +552,7 @@ def convert_forward(m, target_m, new_forward):
         convert_forward(sub_m, target_m, new_forward)
 
 
+# ipex
 def replace_func(m, target_m, func_name, new_func):
     for _, sub_m in m.named_children():
         if isinstance(sub_m, target_m):
@@ -562,7 +561,101 @@ def replace_func(m, target_m, func_name, new_func):
         replace_func(sub_m, target_m, func_name, new_func)
 
 
-def _optimize_post(model, lightweight_bmm=False):
+def lowering_class_cpu(m, target_m, new_class, config, tpp=False, woq=False):
+    for name, sub_m in m.named_children():
+        if isinstance(sub_m, target_m):
+            new_m = new_class(sub_m, config, tpp, woq)
+            setattr(m, name, new_m)
+        lowering_class_cpu(sub_m, target_m, new_class, config, tpp, woq)
+
+def convert_class(m, target_m, new_class, config, distributed=False):
+    for name, sub_m in m.named_children():
+        if isinstance(sub_m, target_m):
+            new_m = new_class(sub_m, config, distributed)
+            setattr(m, name, new_m)
+        convert_class(sub_m, target_m, new_class, config, distributed)
+
+def _set_optimized_model_for_generation(
+    model,
+    optimized_model,
+    first_token_optimized_model=None,
+):
+    from intel_extension_for_pytorch.transformers.models.reference.models import IPEX_LLM_Model_Return
+
+    if first_token_optimized_model is not None:
+        model.trace_graph_first = IPEX_LLM_Model_Return(
+            model, first_token_optimized_model
+        ).forward
+
+    model.trace_graph = IPEX_LLM_Model_Return(model, optimized_model).forward
+    print(
+        "ipex.llm.optimize has set the optimized or quantization model for model.generate()"
+    )
+    return model
+
+def _ipex_optimize_decoder(model, decoder_layer):
+    from intel_extension_for_pytorch.transformers.models.reference.modules.decoder import _IPEXDecoderLayerRef
+    from intel_extension_for_pytorch.transformers.models.cpu.modules.decoder import _IPEXDecoderLayerCPU
+
+    for supported_mlp_class in [_IPEXDecoderLayerRef]:
+        lowering_class_cpu(
+            model,
+            supported_mlp_class,
+            _IPEXDecoderLayerCPU,
+            model.config,
+            tpp=False,
+            woq=False,
+        )
+    convert_class(
+        model,
+        decoder_layer,
+        _IPEXDecoderLayerRef,
+        model.config,
+        distributed=True,
+    )
+
+def _ipex_optimize_attention(model, attention_layer):
+    from intel_extension_for_pytorch.transformers.models.reference.modules.attentions import _IPEXAttentionRef
+    from intel_extension_for_pytorch.transformers.models.cpu.modules.attentions import _IPEXAttentionCPU
+    for supported_mha_class in [_IPEXAttentionRef]:
+        lowering_class_cpu(
+            model,
+            supported_mha_class,
+            _IPEXAttentionCPU,
+            model.config,
+            tpp=False,
+            woq=False,
+        )
+    convert_class(
+        model,
+        attention_layer,
+        _IPEXAttentionRef,
+        model.config,
+        distributed=True,
+    )
+
+def _ipex_jit(model):
+    from intel_extension_for_pytorch.transformers.optimize import get_dummy_input
+    sample_inputs = (
+        get_dummy_input(model, return_dict=True)
+    )
+    with torch.no_grad(), torch.cpu.amp.autocast(
+        enabled=True
+    ):
+        trace_model = torch.jit.trace(
+            model,
+            example_kwarg_inputs=sample_inputs,
+            strict=False,
+            check_trace=False,
+        )
+        trace_model = torch.jit.freeze(trace_model)
+        model = _set_optimized_model_for_generation(
+            model, optimized_model=trace_model
+        )
+
+    return model.eval()
+
+def _optimize_post(model, lightweight_bmm=False, qtype="auto"):
     from packaging import version
     from bigdl.llm.transformers.models.llama import llama_attention_forward_4_31
     from bigdl.llm.transformers.models.llama import llama_attention_selective_batching_forward_4_31
@@ -581,39 +674,227 @@ def _optimize_post(model, lightweight_bmm=False):
     enable_vllm_se_batching = vllm_selective_batching is not None
     enable_vllm_se_batching = enable_vllm_se_batching and vllm_selective_batching.lower() == "true"
 
+    
+    _enable_ipex = os.getenv("ENABLE_IPEX")
+    _enable_ipex = (_enable_ipex is not None) and (_enable_ipex.lower() == "true") 
+    _enable_ipex = _enable_ipex and (qtype == ggml_tensor_qtype["bf16"])
+    print('ENABLE_IPEX: ', _enable_ipex)
+
     trans_version = transformers.__version__
     if version.parse(trans_version) >= version.parse("4.31.0"):
-        convert_forward(
-            model,
-            transformers.models.llama.modeling_llama.LlamaRMSNorm,
-            llama_rms_norm_forward,)
-        convert_forward(model,
-                        transformers.models.llama.modeling_llama.LlamaMLP,
-                        llama_mlp_forward)
-        if version.parse(trans_version) >= version.parse("4.36.0"):
-            # transformers version >= 4.36.0
-            from bigdl.llm.transformers.models.llama import llama_attention_forward_4_36
-            convert_forward(
-                model,
-                transformers.models.llama.modeling_llama.LlamaAttention,
-                llama_attention_forward_4_36, )
+        if _enable_ipex:
+            import intel_extension_for_pytorch as ipex
+            from intel_extension_for_pytorch.transformers.models.cpu.fusions.mha_fusion import _IPEXRMSNorm
+            from intel_extension_for_pytorch.transformers.models.cpu.modules.decoder import _IPEXDecoderLayerCPU
+            from intel_extension_for_pytorch.transformers.models.cpu.modules.attentions import _IPEXAttentionCPU
+            from intel_extension_for_pytorch.transformers.models.reference.modules.decoder import _IPEXDecoderLayerRef
+            from intel_extension_for_pytorch.transformers.models.reference.modules.attentions import _IPEXAttentionRef
+            from intel_extension_for_pytorch.cpu._auto_kernel_selection import _enable_tpp
+            from intel_extension_for_pytorch.transformers.optimize import model_convert_reference, get_dummy_input
+
+            # convert_forward(
+            #     model,
+            #     transformers.models.llama.modeling_llama.LlamaRMSNorm,
+            #     llama_rms_norm_forward,)
+
+            # amp_dtype = getattr(torch, 'bfloat16')
+            # model = ipex.llm.optimize(
+            #             model.eval(),
+            #             dtype=amp_dtype,
+            #             inplace=True,
+            #             deployment_mode=True,
+            # )
+
+            # _enable_tpp()
+            # model = ipex.optimize(model.eval(), dtype=torch.bfloat16, inplace=True)
+            model = model_convert_reference(model)
+
+            # lowering_class_cpu(
+            #         model,
+            #         transformers.models.llama.modeling_llama.LlamaRMSNorm,
+            #         _IPEXRMSNorm,
+            #         model.config,
+            #         tpp=False,
+            #         woq=False,
+            #     )
+            # convert_class(
+            #     model,
+            #     transformers.models.llama.modeling_llama.LlamaRMSNorm,
+            #     _IPEXRMSNorm,
+            #     model.config,
+            #     distributed=True,
+            # )
+            
+            _ipex_optimize_attention(model, transformers.models.llama.modeling_llama.LlamaAttention)
+            _ipex_optimize_decoder(model, transformers.models.llama.modeling_llama.LlamaDecoderLayer)
+            from intel_extension_for_pytorch.transformers.models.reference.models import output_hook
+            model.register_forward_hook(output_hook, with_kwargs=True)
+            # for supported_mlp_class in [_IPEXDecoderLayerRef]:
+            #     lowering_class_cpu(
+            #         model,
+            #         supported_mlp_class,
+            #         _IPEXDecoderLayerCPU,
+            #         model.config,
+            #         tpp=False,
+            #         woq=False,
+            #     )
+            # convert_class(
+            #     model,
+            #     transformers.models.llama.modeling_llama.LlamaDecoderLayer,
+            #     _IPEXDecoderLayerRef,
+            #     model.config,
+            #     distributed=True,
+            # )
+
+            # for supported_mha_class in [_IPEXAttentionRef]:
+            #     lowering_class_cpu(
+            #         model,
+            #         supported_mha_class,
+            #         _IPEXAttentionCPU,
+            #         model.config,
+            #         tpp=False,
+            #         woq=False,
+            #     )
+            # convert_class(
+            #     model,
+            #     transformers.models.llama.modeling_llama.LlamaAttention,
+            #     _IPEXAttentionRef,
+            #     model.config,
+            #     distributed=True,
+            # )
+            
+
+            # sample_inputs = (
+            #     get_dummy_input(model, return_dict=True)
+            # )
+            # with torch.no_grad(), torch.cpu.amp.autocast(
+            #     enabled=True
+            # ):
+            #     trace_model = torch.jit.trace(
+            #         model,
+            #         example_kwarg_inputs=sample_inputs,
+            #         strict=False,
+            #         check_trace=False,
+            #     )
+            #     trace_model = torch.jit.freeze(trace_model)
+            #     model = _set_optimized_model_for_generation(
+            #         model, optimized_model=trace_model
+            #     )
+
+            return _ipex_jit(model)
         else:
-            # transformers version between 4.31.0 - 4.35.2
             convert_forward(
                 model,
-                transformers.models.llama.modeling_llama.LlamaAttention,
-                llama_attention_forward_4_31, )
-            if enable_vllm_se_batching:
-                convert_forward(
-                    model,
-                    transformers.models.llama.modeling_llama.LlamaModel,
-                    llama_model_selective_batching_forward_4_31,
-                )
+                transformers.models.llama.modeling_llama.LlamaRMSNorm,
+                llama_rms_norm_forward,)
+
+            convert_forward(model,
+                            transformers.models.llama.modeling_llama.LlamaMLP,
+                            llama_mlp_forward)
+                    
+            if version.parse(trans_version) >= version.parse("4.36.0"):
+                # transformers version >= 4.36.0
+                from bigdl.llm.transformers.models.llama import llama_attention_forward_4_36
                 convert_forward(
                     model,
                     transformers.models.llama.modeling_llama.LlamaAttention,
-                    llama_attention_selective_batching_forward_4_31,
-                )
+                    llama_attention_forward_4_36, )
+            else:
+                # transformers version between 4.31.0 - 4.35.2
+                convert_forward(
+                    model,
+                    transformers.models.llama.modeling_llama.LlamaAttention,
+                    llama_attention_forward_4_31, )
+                if enable_vllm_se_batching:
+                    convert_forward(
+                        model,
+                        transformers.models.llama.modeling_llama.LlamaModel,
+                        llama_model_selective_batching_forward_4_31,
+                    )
+                    convert_forward(
+                        model,
+                        transformers.models.llama.modeling_llama.LlamaAttention,
+                        llama_attention_selective_batching_forward_4_31,
+                    )
+            # def _set_optimized_model_for_generation(
+            #     model,
+            #     optimized_model,
+            #     first_token_optimized_model=None,
+            # ):
+            #     from intel_extension_for_pytorch.transformers.models.reference.models import IPEX_LLM_Model_Return
+
+            #     if first_token_optimized_model is not None:
+            #         model.trace_graph_first = IPEX_LLM_Model_Return(
+            #             model, first_token_optimized_model
+            #         ).forward
+
+            #     model.trace_graph = IPEX_LLM_Model_Return(model, optimized_model).forward
+            #     print(
+            #         "ipex.llm.optimize has set the optimized or quantization model for model.generate()"
+            #     )
+            #     return model
+            
+            # def get_dummy_input(_model, return_dict=False):
+            #     sample_inputs = None
+            #     if hasattr(_model.config, "n_layer"):
+            #         model_num_layers = _model.config.n_layer
+            #     elif hasattr(_model.config, "num_hidden_layers"):
+            #         model_num_layers = _model.config.num_hidden_layers
+            #     elif hasattr(_model.config, "num_layers"):
+            #         model_num_layers = _model.config.num_layers
+            #     elif hasattr(_model.config, "n_layers"):
+            #         model_num_layers = _model.config.n_layers
+
+            #     input_ids = torch.ones(32).to(torch.long)
+            #     model_inputs = _model.prepare_inputs_for_generation(input_ids.unsqueeze(0))
+            #     has_position_ids = "position_ids" in model_inputs
+            #     attention_mask = torch.ones(len(input_ids))
+            #     position_ids = torch.arange(len(input_ids))
+            #     past_key_values = [(torch.zeros(1, 40, 0, 128).contiguous(), torch.zeros(1, 40, 0, 128).contiguous()) for _ in range(model_num_layers)]
+            #     # past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+
+            #     # past_key_values = tuple(past_key_values)
+            #     # past_key_values = torch.zeros(model_num_layers, 2, 1, 40, 0, 128)
+            #     # past_key_values = None
+            #     if has_position_ids:
+            #         sample_inputs = (
+            #             {
+            #                 "input_ids": input_ids.unsqueeze(0),
+            #                 "attention_mask": attention_mask.unsqueeze(0),
+            #                 "position_ids": position_ids.unsqueeze(0),
+            #                 "past_key_values": past_key_values,
+            #             }
+            #             if return_dict
+            #             else (
+            #                 input_ids.unsqueeze(0),
+            #                 attention_mask.unsqueeze(0),
+            #                 position_ids.unsqueeze(0),
+            #                 past_key_values,
+            #             )
+            #         )
+            #     if "return_last_logit" in model_inputs:
+            #         sample_inputs["return_last_logit"] = torch.tensor(True)
+            #     return sample_inputs
+
+            # sample_inputs = (
+            #     get_dummy_input(model, return_dict=True)
+            # )
+
+            # with torch.no_grad(), torch.cpu.amp.autocast(
+            #     enabled=True
+            # ):
+            #     trace_model = torch.jit.trace(
+            #         model,
+            #         example_kwarg_inputs=sample_inputs,
+            #         strict=False,
+            #         check_trace=False,
+            #     )
+            #     trace_model = torch.jit.freeze(trace_model)
+            #     model = _set_optimized_model_for_generation(
+            #         model, optimized_model=trace_model
+            #     )
+
+            return model
     else:
         # todo implement 4.28.0 ~ 4.30.2
         pass
@@ -745,21 +1026,30 @@ def _optimize_post(model, lightweight_bmm=False):
             from bigdl.llm.transformers.models.baichuan2 import baichuan_13b_rms_norm_forward
             from bigdl.llm.transformers.models.baichuan2 import baichuan_mlp_forward
             from bigdl.llm.transformers.models.baichuan2 import baichuan_13b_get_alibi_mask
-            convert_forward(model,
-                            module.BaichuanAttention,
-                            baichuan_attention_forward_13b
-                            )
-            # baichuan2-13B's RMSNorm is a little different
-            convert_forward(model,
-                            module.RMSNorm,
-                            baichuan_13b_rms_norm_forward)
-            convert_forward(model,
-                            module.MLP,
-                            baichuan_mlp_forward)
-            replace_func(model,
-                         module.BaichuanModel,
-                         "get_alibi_mask",
-                         baichuan_13b_get_alibi_mask)
+
+            if _enable_ipex:
+                model = model_convert_reference(model)
+                from intel_extension_for_pytorch.transformers.models.reference.models import output_hook
+                model.register_forward_hook(output_hook, with_kwargs=True)
+                return _ipex_jit(model)
+            else:
+                convert_forward(model,
+                                module.BaichuanAttention,
+                                baichuan_attention_forward_13b
+                                )
+                # baichuan2-13B's RMSNorm is a little different
+                convert_forward(model,
+                                module.RMSNorm,
+                                baichuan_13b_rms_norm_forward)
+                convert_forward(model,
+                                module.MLP,
+                                baichuan_mlp_forward)
+                replace_func(model,
+                             module.BaichuanModel,
+                             "get_alibi_mask",
+                             baichuan_13b_get_alibi_mask)
+            
+
     elif model.config.model_type == "baichuan":
         # baichuan1
         if model.config.hidden_size == 4096:
@@ -931,27 +1221,6 @@ def _optimize_post(model, lightweight_bmm=False):
         modeling_module_name = model.__class__.__module__
         module = importlib.import_module(modeling_module_name)
         from bigdl.llm.transformers.models.rwkv4 import rwkv_attention_forward
-        convert_forward(model,
-                        module.RwkvSelfAttention,
-                        rwkv_attention_forward)
-    elif model.config.model_type == "deci":
-        modeling_module_name = model.__class__.__module__
-        module = importlib.import_module(modeling_module_name)
-        from bigdl.llm.transformers.models.decilm import decilm_attention_forward_4_35_2
-        convert_forward(model,
-                        module.LlamaRMSNorm,
-                        llama_rms_norm_forward)
-        convert_forward(model,
-                        module.LlamaMLP,
-                        llama_mlp_forward)
-        convert_forward(model,
-                        module.DeciLMAttention,
-                        decilm_attention_forward_4_35_2, )
-    elif model.config.model_type == "rwkv5":
-        # rwkv v5
-        modeling_module_name = model.__class__.__module__
-        module = importlib.import_module(modeling_module_name)
-        from bigdl.llm.transformers.models.rwkv5 import rwkv_attention_forward
         convert_forward(model,
                         module.RwkvSelfAttention,
                         rwkv_attention_forward)
