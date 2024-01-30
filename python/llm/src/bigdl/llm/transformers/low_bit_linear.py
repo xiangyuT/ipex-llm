@@ -74,6 +74,38 @@ IQ2_XXS = ggml_tensor_qtype["iq2_xxs"]
 IQ2_XS = ggml_tensor_qtype["iq2_xs"]
 
 
+def q4_0_xpu_to_gptq_format(ggml_weight, weight_shape):
+    from bigdl.llm.transformers.low_bit_linear import get_block_size
+    Q4_0 = get_block_size("sym_int4")
+
+    n, k = weight_shape
+    ggml_weight_only = ggml_weight[:n*k//2]
+    ggml_scales = ggml_weight[n*k//2:]
+    assert ggml_scales.shape[0] == n*k*2//Q4_0
+
+    qweight = ggml_weight_only.clone()
+    scales = ggml_scales.view(torch.float16).clone()
+
+    qweight_0 = qweight & 0x0F
+    qweight_1 = qweight >> 4
+
+    qweight_0 = qweight_0.reshape(n, -1, Q4_0//2)
+    qweight_1 = qweight_1.reshape(n, -1, Q4_0//2)
+    qweight = torch.cat([qweight_0, qweight_1], dim=-1)
+    qweight = qweight.reshape(n//2, 2, -1, Q4_0)
+    qweight = qweight.bitwise_left_shift(
+        torch.tensor([0, 4], dtype=torch.uint8, device=ggml_weight.device).reshape(1, 2, 1, 1))
+
+    qweight = torch.bitwise_or(qweight[:, 0, :, :], qweight[:, 1, :, :])
+    qweight = qweight.reshape(n//2, k)
+    qweight = qweight.transpose(0, 1).contiguous()
+
+    scales = scales.reshape(n, k//Q4_0).transpose(0, 1).contiguous()
+
+    zeros = torch.ones([k//Q4_0, n//2], dtype=torch.uint8, device=ggml_weight.device) * (119) # 0x77
+    return qweight, zeros, scales
+
+
 def get_block_size(qtype: str):
     return ggml.ggml_qk_size(ggml_tensor_qtype[qtype])
 
@@ -452,6 +484,9 @@ class LowBitLinear(nn.Linear):
         self.conver_to_half = conver_to_half
         self.mp_group = mp_group
         self.compute_dtype = None  # only for training
+        self.qweight = None
+        self.zeros = None
+        self.scales = None
 
     def forward(self, x: torch.Tensor):
         # Due to inconsistent training status in some models like Baichuan-7b-Chat,
@@ -477,6 +512,12 @@ class LowBitLinear(nn.Linear):
         if 0 in x_shape:
             # return empty tensor with output shape, x.dtype and x.device
             return torch.empty(new_shape, dtype=x.dtype, device=x.device)
+
+        if self.qweight is None:
+            # this will double the memory usage.
+            # Testing only
+            self.qweight, self.zeros, self.scales = q4_0_xpu_to_gptq_format(self.weight.data, self.weight_shape)
+
 
         x_2d = x.view(-1, x_shape[-1])
         # x0 for weight
@@ -520,8 +561,10 @@ class LowBitLinear(nn.Linear):
                                                      input_seq_size)
                     result = result.to(x.dtype)
                 else:
-                    result = linear_q4_0.forward_new(x_2d, self.weight.data, self.weight.qtype,
-                                                     input_seq_size)
+                    x_2d = x_2d.half()
+                    result = torch.ops.torch_ipex.mm_int4(x_2d, self.qweight, self.scales, self.zeros, 64)
+                    # result = linear_q4_0.forward_new(x_2d, self.weight.data, self.weight.qtype,
+                    #                                  input_seq_size)
             result = result.view(new_shape)
             if self.mp_group is not None:
                 from deepspeed import comm as dist
