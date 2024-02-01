@@ -237,6 +237,7 @@ def llama_attention_forward_4_31(
     no_tp = not self.config.pretraining_tp > 1
     decoding_fast_path = (no_tp and qtype_check and use_fuse_rope and
                           enough_kv_room and bsz * q_len == 1)
+    decoding_fast_path = decoding_fast_path and not self.q_proj.transpose_qweight
 
     # single batch decoding fast path
     # forward_qkv takes will perform QKV projection, rotary position embedding
@@ -458,6 +459,7 @@ def llama_attention_selective_batching_forward_4_31(
     no_tp = not self.config.pretraining_tp > 1
     decoding_fast_path = (no_tp and is_q4_0 and use_fuse_rope and
                           bsz * q_len == 1)
+    decoding_fast_path = decoding_fast_path and not self.q_proj.transpose_qweight
 
     updated_past_key_values = []
     # single batch decoding fast path
@@ -650,6 +652,7 @@ def llama_attention_forward_4_36(
     no_tp = not self.config.pretraining_tp > 1
     decoding_fast_path = (no_tp and is_q4_0 and use_fuse_rope and
                           enough_kv_room and bsz * q_len == 1)
+    decoding_fast_path = decoding_fast_path and not self.q_proj.transpose_qweight
 
     # single batch decoding fast path
     # forward_qkv takes will perform QKV projection, rotary position embedding

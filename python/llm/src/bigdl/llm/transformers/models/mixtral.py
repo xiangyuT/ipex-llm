@@ -153,6 +153,7 @@ def mixtral_attention_forward(
                                                 use_fuse_rope,
                                                 enough_kv_room,
                                                 bsz * q_len)
+    decoding_fast_path = decoding_fast_path and not self.q_proj.transpose_qweight
 
     if decoding_fast_path:
         hidden_states = hidden_states.view(1, -1)

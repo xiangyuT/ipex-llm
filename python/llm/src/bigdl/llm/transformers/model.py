@@ -310,6 +310,7 @@ class _BaseAutoModelClass:
         lightweight_bmm = kwargs.pop("lightweight_bmm", False)
         quant_config = kwargs.pop("quantization_config", None)
         imatrix_data = kwargs.pop("imatrix_data", None)
+        transpose_qweight = kwargs.pop("transpose_qweight", False)
         _args = copy.deepcopy(args)
         _kwargs = copy.deepcopy(kwargs)
         awq_config = None
@@ -371,7 +372,8 @@ class _BaseAutoModelClass:
                                      modules_to_not_convert=modules_to_not_convert,
                                      cpu_embedding=cpu_embedding, lightweight_bmm=lightweight_bmm,
                                      torch_dtype=kwargs.get("torch_dtype", 'auto'),
-                                     imatrix_data=imatrix_data)
+                                     imatrix_data=imatrix_data,
+                                     transpose_qweight=transpose_qweight,)
         model.config.update({"bigdl_transformers_low_bit": q_k})
 
         # enable tie_word_embeddings for MPT

@@ -74,7 +74,7 @@ IQ2_XXS = ggml_tensor_qtype["iq2_xxs"]
 IQ2_XS = ggml_tensor_qtype["iq2_xs"]
 
 
-def q4_0_xpu_to_gptq_format(ggml_weight, weight_shape):
+def q4_0_xpu_transpose(ggml_weight, weight_shape):
     from bigdl.llm.transformers.low_bit_linear import get_block_size
     Q4_0 = get_block_size("sym_int4")
 
@@ -103,7 +103,13 @@ def q4_0_xpu_to_gptq_format(ggml_weight, weight_shape):
     scales = scales.reshape(n, k//Q4_0).transpose(0, 1).contiguous()
 
     zeros = torch.ones([k//Q4_0, n//2], dtype=torch.uint8, device=ggml_weight.device) * (119) # 0x77
-    return qweight, zeros, scales
+
+    qweight_bytes  = qweight.view(torch.uint8).view(-1)
+    scales_bytes = scales.view(torch.uint8).view(-1)
+    zeros_bytes = zeros.view(torch.uint8).view(-1)
+
+    weight = torch.concat([qweight_bytes, zeros_bytes, scales_bytes], dim=0)
+    return weight
 
 
 def get_block_size(qtype: str):
@@ -238,7 +244,8 @@ class FP4Params(torch.nn.Parameter):
                 convert_shape_only=False,
                 qtype=None,
                 imatrix=None,
-                in_features=None):
+                in_features=None,
+                transpose_qweight=False,):
         if data is None:
             data = torch.empty(0)
 
@@ -250,6 +257,7 @@ class FP4Params(torch.nn.Parameter):
         self.convert_shape_only = convert_shape_only
         self.imatrix = imatrix
         self.in_features = in_features
+        self.transpose_qweight = transpose_qweight
         return self
 
     def ggml_mse(self, w, ggml_qtype, device):
@@ -338,13 +346,16 @@ class FP4Params(torch.nn.Parameter):
             self.data = ggml_q_format_convet_cpu2xpu(self.data,
                                                      reduce(mul, self._shape, 1),
                                                      self.qtype)
+            if self.transpose_qweight:
+                self.data = q4_0_xpu_transpose(self.data, self._shape)
             new_param = FP4Params(super().to(device=device,
                                              dtype=dtype,
                                              non_blocking=non_blocking),
                                   requires_grad=self.requires_grad,
                                   quantized=self.quantized,
                                   _shape=self._shape,
-                                  qtype=self.qtype)
+                                  qtype=self.qtype,
+                                  transpose_qweight=self.transpose_qweight)
             return new_param
         elif (device is not None and device.type == "cpu" and self.data.device.type == "xpu"):
             new_param = FP4Params(super().to(device=device,
@@ -353,7 +364,10 @@ class FP4Params(torch.nn.Parameter):
                                   requires_grad=self.requires_grad,
                                   quantized=self.quantized,
                                   _shape=self._shape,
-                                  qtype=self.qtype)
+                                  qtype=self.qtype,
+                                  transpose_qweight=self.transpose_qweight)
+            if self.transpose_qweight:
+                invalidInputError(False, "Transpose qweight is not supported")
             new_param.data = ggml_q_format_convet_xpu2cpu(new_param.data,
                                                           reduce(mul, new_param._shape, 1),
                                                           new_param.qtype)
@@ -365,7 +379,8 @@ class FP4Params(torch.nn.Parameter):
                                   requires_grad=self.requires_grad,
                                   quantized=self.quantized,
                                   _shape=self._shape,
-                                  qtype=self.qtype)
+                                  qtype=self.qtype,
+                                  transpose_qweight=self.transpose_qweight)
             return new_param
 
 
@@ -471,11 +486,12 @@ class MatMulLowBitCPU(torch.autograd.Function):
 
 class LowBitLinear(nn.Linear):
     def __init__(self, input_features, output_features, qtype, bias=True,
-                 conver_to_half=True, mp_group=None):
+                 conver_to_half=True, mp_group=None, transpose_qweight=False):
         super().__init__(input_features, output_features, bias)
         self.weight = FP4Params(self.weight.data,
                                 requires_grad=False,
-                                quantized=False, _shape=None, qtype=qtype)
+                                quantized=False, _shape=None, qtype=qtype,
+                                transpose_qweight=transpose_qweight)
         self.in_len = input_features
         self.out_len = output_features
         self.weight_shape = (self.out_len, self.in_len)
@@ -484,9 +500,7 @@ class LowBitLinear(nn.Linear):
         self.conver_to_half = conver_to_half
         self.mp_group = mp_group
         self.compute_dtype = None  # only for training
-        self.qweight = None
-        self.zeros = None
-        self.scales = None
+        self.transpose_qweight = transpose_qweight
 
     def forward(self, x: torch.Tensor):
         # Due to inconsistent training status in some models like Baichuan-7b-Chat,
@@ -513,12 +527,6 @@ class LowBitLinear(nn.Linear):
             # return empty tensor with output shape, x.dtype and x.device
             return torch.empty(new_shape, dtype=x.dtype, device=x.device)
 
-        if self.qweight is None:
-            # this will double the memory usage.
-            # Testing only
-            self.qweight, self.zeros, self.scales = q4_0_xpu_to_gptq_format(self.weight.data, self.weight_shape)
-
-
         x_2d = x.view(-1, x_shape[-1])
         # x0 for weight
         x0 = self.weight.data
@@ -541,7 +549,11 @@ class LowBitLinear(nn.Linear):
             elif len(x_shape) < 3:
                 input_seq_size = 1
 
-            if is_training:
+
+            if self.transpose_qweight:
+                x_2d = x_2d.half()
+                result = linear_q4_0.mm_int4(x_2d, self.weight.data)
+            elif is_training:
                 # training path
                 if x_2d.requires_grad:
                     result = MatMulLowBit.apply(x_2d, self.weight, input_seq_size)
