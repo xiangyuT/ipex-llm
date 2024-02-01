@@ -573,10 +573,8 @@ class LowBitLinear(nn.Linear):
                                                      input_seq_size)
                     result = result.to(x.dtype)
                 else:
-                    x_2d = x_2d.half()
-                    result = linear_q4_0.mm_int4(x_2d, self.qweight, self.scales, self.zeros)
-                    # result = linear_q4_0.forward_new(x_2d, self.weight.data, self.weight.qtype,
-                    #                                  input_seq_size)
+                    result = linear_q4_0.forward_new(x_2d, self.weight.data, self.weight.qtype,
+                                                     input_seq_size)
             result = result.view(new_shape)
             if self.mp_group is not None:
                 from deepspeed import comm as dist
