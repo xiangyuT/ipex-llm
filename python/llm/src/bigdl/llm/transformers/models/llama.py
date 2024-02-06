@@ -214,6 +214,35 @@ def llama_decoder_forward(
     return outputs
 
 
+def fuse_qkv_weight(q_proj, k_proj, v_proj):
+    weight_size = q_proj.out_len * q_proj.in_len // 2
+    zeros_size = q_proj.in_len * q_proj.out_len // 2 // 64
+    zeros_end = weight_size + zeros_size
+    weight_byte_shape = (q_proj.in_len, q_proj.out_len//2)
+    zeros_byte_shape = (q_proj.in_len//64, q_proj.out_len//2)
+    scales_byte_shape = (q_proj.in_len//64, q_proj.out_len*2)
+    qweight = torch.concat([q_proj.weight.data[:weight_size].reshape(weight_byte_shape),
+                            k_proj.weight.data[:weight_size].reshape(weight_byte_shape),
+                            v_proj.weight.data[:weight_size].reshape(weight_byte_shape),
+                            ], dim=-1).reshape(-1)
+    qzeros = torch.concat([q_proj.weight.data[weight_size:zeros_end].reshape(zeros_byte_shape),
+                           k_proj.weight.data[weight_size:zeros_end].reshape(zeros_byte_shape),
+                           v_proj.weight.data[weight_size:zeros_end].reshape(zeros_byte_shape),
+                           ], dim=-1).reshape(-1)
+    qscales = torch.concat([q_proj.weight.data[zeros_end:].reshape(scales_byte_shape),
+                            k_proj.weight.data[zeros_end:].reshape(scales_byte_shape),
+                            v_proj.weight.data[zeros_end:].reshape(scales_byte_shape),
+                            ], dim=-1).reshape(-1)
+    q_proj.weight.data = torch.empty(0)
+    k_proj.weight.data = torch.empty(0)
+    v_proj.weight.data = torch.empty(0)
+    return torch.cat([qweight, qzeros, qscales], dim=0)
+
+
+def should_use_mm_int4_qkv(self, device):
+    return device.type == "xpu" and self.q_proj.qtype == SYM_INT4 and self.q_proj.transpose_qweight
+
+
 def llama_attention_forward_4_31(
     self,
     hidden_states: torch.Tensor,
@@ -303,28 +332,13 @@ def llama_attention_forward_4_31(
                     query_states, key_states, value_states
                 )
             else:
-                if self.q_proj.transpose_qweight:
-                    if not hasattr(self, "qkv_proj_weight"):
-                        weight_size = self.q_proj.out_len * self.q_proj.in_len // 2
-                        zeros_size = self.q_proj.in_len * self.q_proj.out_len // 2 // 64
-                        qweight = torch.concat([self.q_proj.weight.data[:weight_size].reshape(self.q_proj.in_len, self.q_proj.out_len//2),
-                                            self.k_proj.weight.data[:weight_size].reshape(self.q_proj.in_len, self.q_proj.out_len//2),
-                                            self.v_proj.weight.data[:weight_size].reshape(self.q_proj.in_len, self.q_proj.out_len//2),
-                                            ], dim=-1).reshape(-1)
-                        qzeros = torch.concat([self.q_proj.weight.data[weight_size:weight_size+zeros_size].reshape(self.q_proj.in_len//64, self.q_proj.out_len//2),
-                                            self.k_proj.weight.data[weight_size:weight_size+zeros_size].reshape(self.q_proj.in_len//64, self.q_proj.out_len//2),
-                                            self.v_proj.weight.data[weight_size:weight_size+zeros_size].reshape(self.q_proj.in_len//64, self.q_proj.out_len//2),
-                                            ], dim=-1).reshape(-1)
-                        qscales = torch.concat([self.q_proj.weight.data[weight_size+zeros_size:].reshape(self.q_proj.in_len//64, self.q_proj.out_len*2),
-                                            self.k_proj.weight.data[weight_size+zeros_size:].reshape(self.q_proj.in_len//64, self.q_proj.out_len*2),
-                                            self.v_proj.weight.data[weight_size+zeros_size:].reshape(self.q_proj.in_len//64, self.q_proj.out_len*2),
-                                            ], dim=-1).reshape(-1)
-                        self.qkv_proj_weight = torch.cat([qweight, qzeros, qscales], dim=0)
-                        self.q_proj.weight.data = torch.empty(0)
-                        self.k_proj.weight.data = torch.empty(0)
-                        self.v_proj.weight.data = torch.empty(0)
+                if should_use_mm_int4_qkv(self, device):
+                    if not hasattr(self, "qkv_proj_qweight"):
+                        self.qkv_proj_qweight = fuse_qkv_weight(self.q_proj,
+                                                                self.k_proj,
+                                                                self.v_proj)
                     import linear_q4_0
-                    qkv_states = linear_q4_0.mm_int4(hidden_states, self.qkv_proj_weight)
+                    qkv_states = linear_q4_0.mm_int4(hidden_states, self.qkv_proj_qweight)
                     query_states = qkv_states[:, :, :hidden_size]
                     key_states = qkv_states[:, :, hidden_size:2*hidden_size]
                     value_states = qkv_states[:, :, 2*hidden_size:]

@@ -81,7 +81,6 @@ def q4_0_xpu_transpose(ggml_weight, weight_shape):
     n, k = weight_shape
     ggml_weight_only = ggml_weight[:n*k//2]
     ggml_scales = ggml_weight[n*k//2:]
-    assert ggml_scales.shape[0] == n*k*2//Q4_0
 
     qweight = ggml_weight_only.clone()
     scales = ggml_scales.view(torch.float16).clone()
@@ -102,9 +101,10 @@ def q4_0_xpu_transpose(ggml_weight, weight_shape):
 
     scales = scales.reshape(n, k//Q4_0).transpose(0, 1).contiguous()
 
-    zeros = torch.ones([k//Q4_0, n//2], dtype=torch.uint8, device=ggml_weight.device) * (119) # 0x77
+    # 119 is the value of 0x77
+    zeros = torch.ones([k//Q4_0, n//2], dtype=torch.uint8, device=ggml_weight.device) * (119)
 
-    qweight_bytes  = qweight.view(torch.uint8).view(-1)
+    qweight_bytes = qweight.view(torch.uint8).view(-1)
     scales_bytes = scales.view(torch.uint8).view(-1)
     zeros_bytes = zeros.view(torch.uint8).view(-1)
 
@@ -548,7 +548,6 @@ class LowBitLinear(nn.Linear):
                 input_seq_size = x_shape[1]
             elif len(x_shape) < 3:
                 input_seq_size = 1
-
 
             if self.transpose_qweight:
                 x_2d = x_2d.half()
