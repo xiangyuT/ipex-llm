@@ -109,7 +109,7 @@ def llama_mlp_forward(
     x_2d = x.view(-1, x.shape[-1])
     bsz, hidden_size = x_2d.shape
     qtype = getattr(self.gate_proj, "qtype", None)
-    if mlp_fusion_check(x_2d, qtype, self.training):
+    if mlp_fusion_check(x_2d, qtype, self.training) and not self.down_proj.transpose_qweight:
         import linear_q4_0
         if not x_2d.is_contiguous():
             x_2d = x_2d.contiguous()
@@ -303,9 +303,35 @@ def llama_attention_forward_4_31(
                     query_states, key_states, value_states
                 )
             else:
-                query_states = self.q_proj(hidden_states)
-                key_states = self.k_proj(hidden_states)
-                value_states = self.v_proj(hidden_states)
+                if self.q_proj.transpose_qweight:
+                    if not hasattr(self, "qkv_proj_weight"):
+                        weight_size = self.q_proj.out_len * self.q_proj.in_len // 2
+                        zeros_size = self.q_proj.in_len * self.q_proj.out_len // 2 // 64
+                        qweight = torch.concat([self.q_proj.weight.data[:weight_size].reshape(self.q_proj.in_len, self.q_proj.out_len//2),
+                                            self.k_proj.weight.data[:weight_size].reshape(self.q_proj.in_len, self.q_proj.out_len//2),
+                                            self.v_proj.weight.data[:weight_size].reshape(self.q_proj.in_len, self.q_proj.out_len//2),
+                                            ], dim=-1).reshape(-1)
+                        qzeros = torch.concat([self.q_proj.weight.data[weight_size:weight_size+zeros_size].reshape(self.q_proj.in_len//64, self.q_proj.out_len//2),
+                                            self.k_proj.weight.data[weight_size:weight_size+zeros_size].reshape(self.q_proj.in_len//64, self.q_proj.out_len//2),
+                                            self.v_proj.weight.data[weight_size:weight_size+zeros_size].reshape(self.q_proj.in_len//64, self.q_proj.out_len//2),
+                                            ], dim=-1).reshape(-1)
+                        qscales = torch.concat([self.q_proj.weight.data[weight_size+zeros_size:].reshape(self.q_proj.in_len//64, self.q_proj.out_len*2),
+                                            self.k_proj.weight.data[weight_size+zeros_size:].reshape(self.q_proj.in_len//64, self.q_proj.out_len*2),
+                                            self.v_proj.weight.data[weight_size+zeros_size:].reshape(self.q_proj.in_len//64, self.q_proj.out_len*2),
+                                            ], dim=-1).reshape(-1)
+                        self.qkv_proj_weight = torch.cat([qweight, qzeros, qscales], dim=0)
+                        self.q_proj.weight.data = torch.empty(0)
+                        self.k_proj.weight.data = torch.empty(0)
+                        self.v_proj.weight.data = torch.empty(0)
+                    import linear_q4_0
+                    qkv_states = linear_q4_0.mm_int4(hidden_states, self.qkv_proj_weight)
+                    query_states = qkv_states[:, :, :hidden_size]
+                    key_states = qkv_states[:, :, hidden_size:2*hidden_size]
+                    value_states = qkv_states[:, :, 2*hidden_size:]
+                else:
+                    query_states = self.q_proj(hidden_states)
+                    key_states = self.k_proj(hidden_states)
+                    value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(bsz, q_len,
                                          self.num_heads, self.head_dim).transpose(1, 2)
