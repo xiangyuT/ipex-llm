@@ -91,12 +91,12 @@ def q4_0_xpu_transpose(ggml_weight, weight_shape):
     qweight_0 = qweight_0.reshape(n, -1, Q4_0//2)
     qweight_1 = qweight_1.reshape(n, -1, Q4_0//2)
     qweight = torch.cat([qweight_0, qweight_1], dim=-1)
-    qweight = qweight.reshape(n//2, 2, -1, Q4_0)
+    qweight = qweight.reshape(n, k//16, 2, 8)
     qweight = qweight.bitwise_left_shift(
-        torch.tensor([0, 4], dtype=torch.uint8, device=ggml_weight.device).reshape(1, 2, 1, 1))
+        torch.tensor([0, 4], dtype=torch.uint8, device=ggml_weight.device).reshape(1, 1, 2, 1))
 
-    qweight = torch.bitwise_or(qweight[:, 0, :, :], qweight[:, 1, :, :])
-    qweight = qweight.reshape(n//2, k)
+    qweight = torch.bitwise_or(qweight[:, :, 0, :], qweight[:, :, 1, :])
+    qweight = qweight.reshape(n, k//2)
     qweight = qweight.transpose(0, 1).contiguous()
 
     scales = scales.reshape(n, k//Q4_0).transpose(0, 1).contiguous()

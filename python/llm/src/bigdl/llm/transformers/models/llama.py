@@ -218,7 +218,7 @@ def fuse_qkv_weight(q_proj, k_proj, v_proj):
     weight_size = q_proj.out_len * q_proj.in_len // 2
     zeros_size = q_proj.in_len * q_proj.out_len // 2 // 64
     zeros_end = weight_size + zeros_size
-    weight_byte_shape = (q_proj.in_len, q_proj.out_len//2)
+    weight_byte_shape = (q_proj.in_len//2, q_proj.out_len)
     zeros_byte_shape = (q_proj.in_len//64, q_proj.out_len//2)
     scales_byte_shape = (q_proj.in_len//64, q_proj.out_len*2)
     qweight = torch.concat([q_proj.weight.data[:weight_size].reshape(weight_byte_shape),
@@ -342,6 +342,10 @@ def llama_attention_forward_4_31(
                     query_states = qkv_states[:, :, :hidden_size]
                     key_states = qkv_states[:, :, hidden_size:2*hidden_size]
                     value_states = qkv_states[:, :, 2*hidden_size:]
+                    # import linear_q4_0
+                    # query_states, key_states, value_states = linear_q4_0.mm_qkv_int4(
+                    #     hidden_states, self.q_proj.weight, self.k_proj.weight, self.v_proj.weight
+                    # )
                 else:
                     query_states = self.q_proj(hidden_states)
                     key_states = self.k_proj(hidden_states)
@@ -763,9 +767,20 @@ def llama_attention_forward_4_36(
                     query_states, key_states, value_states
                 )
             else:
-                query_states = self.q_proj(hidden_states)
-                key_states = self.k_proj(hidden_states)
-                value_states = self.v_proj(hidden_states)
+                if should_use_mm_int4_qkv(self, device):
+                    if not hasattr(self, "qkv_proj_qweight"):
+                        self.qkv_proj_qweight = fuse_qkv_weight(self.q_proj,
+                                                                self.k_proj,
+                                                                self.v_proj)
+                    import linear_q4_0
+                    qkv_states = linear_q4_0.mm_int4(hidden_states, self.qkv_proj_qweight)
+                    query_states = qkv_states[:, :, :hidden_size]
+                    key_states = qkv_states[:, :, hidden_size:2*hidden_size]
+                    value_states = qkv_states[:, :, 2*hidden_size:]
+                else:
+                    query_states = self.q_proj(hidden_states)
+                    key_states = self.k_proj(hidden_states)
+                    value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(bsz, q_len,
                                          self.num_heads, self.head_dim).transpose(1, 2)
