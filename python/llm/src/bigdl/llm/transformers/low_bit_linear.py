@@ -70,6 +70,46 @@ FP4 = ggml_tensor_qtype["fp4"]
 MOFQ4 = ggml_tensor_qtype["mixed_fp4"]
 MOFQ8 = ggml_tensor_qtype["mixed_fp8"]
 FP8E5 = ggml_tensor_qtype["fp8_e5m2"]
+IQ2_XXS = ggml_tensor_qtype["iq2_xxs"]
+IQ2_XS = ggml_tensor_qtype["iq2_xs"]
+
+
+def q4_0_xpu_transpose(ggml_weight, weight_shape):
+    from bigdl.llm.transformers.low_bit_linear import get_block_size
+    Q4_0 = get_block_size("sym_int4")
+
+    n, k = weight_shape
+    ggml_weight_only = ggml_weight[:n*k//2]
+    ggml_scales = ggml_weight[n*k//2:]
+
+    qweight = ggml_weight_only.clone()
+    scales = ggml_scales.view(torch.float16).clone()
+
+    qweight_0 = qweight & 0x0F
+    qweight_1 = qweight >> 4
+
+    qweight_0 = qweight_0.reshape(n, -1, Q4_0//2)
+    qweight_1 = qweight_1.reshape(n, -1, Q4_0//2)
+    qweight = torch.cat([qweight_0, qweight_1], dim=-1)
+    qweight = qweight.reshape(n, k//16, 2, 8)
+    qweight = qweight.bitwise_left_shift(
+        torch.tensor([0, 4], dtype=torch.uint8, device=ggml_weight.device).reshape(1, 1, 2, 1))
+
+    qweight = torch.bitwise_or(qweight[:, :, 0, :], qweight[:, :, 1, :])
+    qweight = qweight.reshape(n, k//2)
+    qweight = qweight.transpose(0, 1).contiguous()
+
+    scales = scales.reshape(n, k//Q4_0).transpose(0, 1).contiguous()
+
+    # 119 is the value of 0x77
+    zeros = torch.ones([k//Q4_0, n//2], dtype=torch.uint8, device=ggml_weight.device) * (119)
+
+    qweight_bytes = qweight.view(torch.uint8).view(-1)
+    scales_bytes = scales.view(torch.uint8).view(-1)
+    zeros_bytes = zeros.view(torch.uint8).view(-1)
+
+    weight = torch.concat([qweight_bytes, zeros_bytes, scales_bytes], dim=0)
+    return weight
 
 
 def get_block_size(qtype: str):
@@ -81,7 +121,9 @@ def get_qk_size(qtype: int):
 
 
 def ggml_convert_qtype(tensor: torch.Tensor, qtype: int,
-                       device=None, convert_shape_only=False):
+                       device=None, convert_shape_only=False,
+                       imatrix: torch.Tensor=None,
+                       in_features: int=None):
     QK = ggml.ggml_qk_size(qtype)
     block_size_in_bytes = ggml.ggml_type_size(qtype)
 
@@ -89,12 +131,10 @@ def ggml_convert_qtype(tensor: torch.Tensor, qtype: int,
                       "Input tensor must be float32")
     src = tensor.data.data_ptr()
     src = ctypes.cast(src, ctypes.POINTER(ctypes.c_float))
-    n = tensor.numel()
-    invalidInputError(n % QK == 0,
-                      "Input tensor size must be multiple of 64")
+    n = tensor.numel()  # all elements
     k = tensor.shape[-1]
     invalidInputError(k % QK == 0,
-                      "Last dim of input tensor must be multiple of 64")
+                      f"Last dim of input tensor must be multiple of {QK}")
 
     dst_size = (n // QK) * block_size_in_bytes
     dst_tensor = torch.empty(dst_size, dtype=torch.uint8,
@@ -103,7 +143,16 @@ def ggml_convert_qtype(tensor: torch.Tensor, qtype: int,
     if not convert_shape_only and device != 'meta':
         dst = ctypes.c_void_p(dst_tensor.data.data_ptr())
         hist = (ctypes.c_int64 * 16)()
-        ggml.ggml_quantize_tensor(src, dst, qtype, n, k, hist)
+        if qtype not in [IQ2_XXS, IQ2_XS]:
+            ggml.ggml_quantize_tensor(src, dst, qtype, n, k, hist)
+        else:
+            # quantize with importance matrix
+            imatrix = imatrix.data.data_ptr()
+            imatrix = ctypes.cast(imatrix, ctypes.POINTER(ctypes.c_float))
+            # pass nrow and n_per_row
+            ggml.ggml_quantize_tensor_with_weights(src, dst, qtype,
+                                                   n // in_features, in_features,
+                                                   hist, imatrix)
     return dst_tensor
 
 
@@ -193,7 +242,10 @@ class FP4Params(torch.nn.Parameter):
                 quantized=False,
                 _shape=None,
                 convert_shape_only=False,
-                qtype=None):
+                qtype=None,
+                imatrix=None,
+                in_features=None,
+                transpose_qweight=False,):
         if data is None:
             data = torch.empty(0)
 
@@ -203,6 +255,9 @@ class FP4Params(torch.nn.Parameter):
         self._shape = _shape
         self.qtype = qtype
         self.convert_shape_only = convert_shape_only
+        self.imatrix = imatrix
+        self.in_features = in_features
+        self.transpose_qweight = transpose_qweight
         return self
 
     def ggml_mse(self, w, ggml_qtype, device):
@@ -255,7 +310,9 @@ class FP4Params(torch.nn.Parameter):
             else:
                 w_quantized = ggml_convert_qtype(w, self.qtype,
                                                  device=device,
-                                                 convert_shape_only=self.convert_shape_only)
+                                                 convert_shape_only=self.convert_shape_only,
+                                                 imatrix=self.imatrix,
+                                                 in_features=self.in_features)
                 self.data = w_quantized
             self.quantized = True
             self._shape = w.shape
@@ -289,13 +346,16 @@ class FP4Params(torch.nn.Parameter):
             self.data = ggml_q_format_convet_cpu2xpu(self.data,
                                                      reduce(mul, self._shape, 1),
                                                      self.qtype)
+            if self.transpose_qweight:
+                self.data = q4_0_xpu_transpose(self.data, self._shape)
             new_param = FP4Params(super().to(device=device,
                                              dtype=dtype,
                                              non_blocking=non_blocking),
                                   requires_grad=self.requires_grad,
                                   quantized=self.quantized,
                                   _shape=self._shape,
-                                  qtype=self.qtype)
+                                  qtype=self.qtype,
+                                  transpose_qweight=self.transpose_qweight)
             return new_param
         elif (device is not None and device.type == "cpu" and self.data.device.type == "xpu"):
             new_param = FP4Params(super().to(device=device,
@@ -304,7 +364,10 @@ class FP4Params(torch.nn.Parameter):
                                   requires_grad=self.requires_grad,
                                   quantized=self.quantized,
                                   _shape=self._shape,
-                                  qtype=self.qtype)
+                                  qtype=self.qtype,
+                                  transpose_qweight=self.transpose_qweight)
+            if self.transpose_qweight:
+                invalidInputError(False, "Transpose qweight is not supported")
             new_param.data = ggml_q_format_convet_xpu2cpu(new_param.data,
                                                           reduce(mul, new_param._shape, 1),
                                                           new_param.qtype)
@@ -316,7 +379,8 @@ class FP4Params(torch.nn.Parameter):
                                   requires_grad=self.requires_grad,
                                   quantized=self.quantized,
                                   _shape=self._shape,
-                                  qtype=self.qtype)
+                                  qtype=self.qtype,
+                                  transpose_qweight=self.transpose_qweight)
             return new_param
 
 
@@ -422,11 +486,12 @@ class MatMulLowBitCPU(torch.autograd.Function):
 
 class LowBitLinear(nn.Linear):
     def __init__(self, input_features, output_features, qtype, bias=True,
-                 conver_to_half=True, mp_group=None):
+                 conver_to_half=True, mp_group=None, transpose_qweight=False):
         super().__init__(input_features, output_features, bias)
         self.weight = FP4Params(self.weight.data,
                                 requires_grad=False,
-                                quantized=False, _shape=None, qtype=qtype)
+                                quantized=False, _shape=None, qtype=qtype,
+                                transpose_qweight=transpose_qweight)
         self.in_len = input_features
         self.out_len = output_features
         self.weight_shape = (self.out_len, self.in_len)
@@ -435,6 +500,7 @@ class LowBitLinear(nn.Linear):
         self.conver_to_half = conver_to_half
         self.mp_group = mp_group
         self.compute_dtype = None  # only for training
+        self.transpose_qweight = transpose_qweight
 
     def forward(self, x: torch.Tensor):
         # Due to inconsistent training status in some models like Baichuan-7b-Chat,
@@ -478,8 +544,15 @@ class LowBitLinear(nn.Linear):
             if x_2d.is_contiguous() is False:
                 x_2d = x_2d.contiguous()
 
-            input_seq_size = x_shape[1]
-            if is_training:
+            if len(x_shape) == 3:
+                input_seq_size = x_shape[1]
+            elif len(x_shape) < 3:
+                input_seq_size = 1
+
+            if self.transpose_qweight:
+                x_2d = x_2d.half()
+                result = linear_q4_0.mm_int4(x_2d, self.weight.data)
+            elif is_training:
                 # training path
                 if x_2d.requires_grad:
                     result = MatMulLowBit.apply(x_2d, self.weight, input_seq_size)

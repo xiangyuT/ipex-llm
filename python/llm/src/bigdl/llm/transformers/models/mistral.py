@@ -82,7 +82,7 @@ def use_decoding_fast_path(q_type, use_fuse_rope, enough_kv_room, bs):
 def compute_attn_outputs_weights(query_states, key_states, value_states, bsz, q_len, kv_seq_len,
                                  num_heads, head_dim, hidden_size, attention_mask):
     attn_weights = torch.matmul(
-        query_states,
+        query_states.to(key_states.dtype),
         key_states.transpose(2, 3)) / math.sqrt(head_dim)
 
     if attn_weights.size() != (bsz, num_heads, q_len, kv_seq_len):
@@ -105,7 +105,7 @@ def compute_attn_outputs_weights(query_states, key_states, value_states, bsz, q_
     # upcast attention to fp32
     attn_weights = nn.functional.\
         softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-    attn_output = torch.matmul(attn_weights, value_states)
+    attn_output = torch.matmul(attn_weights, value_states.to(query_states.dtype))
 
     if attn_output.size() != (bsz, num_heads, q_len, head_dim):
         invalidInputError(
@@ -140,6 +140,7 @@ def mistral_attention_forward(
                                                 use_fuse_rope,
                                                 enough_kv_room,
                                                 bsz * q_len)
+    decoding_fast_path = decoding_fast_path and not self.q_proj.transpose_qweight
 
     if decoding_fast_path:
         hidden_states = hidden_states.view(1, -1)
@@ -279,6 +280,7 @@ def mistral_attention_forward_4_36(
                                                 use_fuse_rope,
                                                 enough_kv_room,
                                                 bsz * q_len)
+    decoding_fast_path = decoding_fast_path and not self.q_proj.transpose_qweight
 
     if decoding_fast_path:
         hidden_states = hidden_states.view(1, -1)

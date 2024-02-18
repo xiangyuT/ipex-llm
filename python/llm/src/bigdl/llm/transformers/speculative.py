@@ -80,29 +80,41 @@ def generate(
 GenerationMixin.generate = generate
 
 
-def sample(logits, return_probs: bool=False, do_sample: bool=False, top_k: int=50,
-           top_p: float=0.7, temperature: float=0.7):
-
+def greedy(logits, return_probs: bool=False):
     if return_probs:
         all_probs = logits.softmax(-1)
-        if do_sample and top_k != 1 and top_p != 0.0 and temperature != 0.0:
-            _logits = top_k_top_p_filtering(logits.view(-1, logits.size(-1)) / temperature,
-                                            top_k=top_k, top_p=top_p)
-            output_ids = torch.multinomial(_logits.softmax(-1),
-                                           num_samples=1).view(logits.shape[:-1])
-            probs = torch.gather(all_probs, -1, output_ids.unsqueeze(-1)).squeeze(-1)
-        else:
-            probs, output_ids = torch.max(all_probs, dim=-1)
+        probs, output_ids = torch.max(all_probs, dim=-1)
         return output_ids, probs
     else:
-        if do_sample and top_k != 1 and top_p != 0.0 and temperature != 0.0:
-            _logits = top_k_top_p_filtering(logits.view(-1, logits.size(-1)) / temperature,
-                                            top_k=top_k, top_p=top_p)
-            output_ids = torch.multinomial(_logits.softmax(-1),
-                                           num_samples=1).view(logits.shape[:-1])
-        else:
-            output_ids = torch.argmax(logits, dim=-1)
+        output_ids = torch.argmax(logits, dim=-1)
         return output_ids
+
+
+def deepmind_sample(logits, return_probs: bool=False, top_k: int=50,
+                    top_p: float=0.7, temperature: float=0.7):
+    prob_list = logits_to_probs(logits, top_k=top_k, top_p=top_p, temperature=temperature)
+    output_ids = multinomial_sample_one_no_sync(prob_list)
+    if return_probs:
+        all_probs = logits.softmax(-1)
+        probs = torch.gather(all_probs, -1, output_ids.unsqueeze(-1)).squeeze(-1)
+        return output_ids, prob_list, probs
+    else:
+        return output_ids, prob_list
+
+
+def logits_to_probs(logits, top_k: int=50, top_p: float=0.7, temperature: float=0.7):
+    invalidInputError(top_k != 1 and top_p != 0.0 and temperature != 0.0,
+                      "top_k != 1 and top_p != 0.0 and temperature != 0.0 if do_sample=True")
+    _logits = top_k_top_p_filtering(logits.view(-1, logits.size(-1)) / temperature,
+                                    top_k=top_k, top_p=top_p)
+    prob_list = _logits.softmax(-1)
+
+    return prob_list
+
+
+def multinomial_sample_one_no_sync(probs_sort):
+    q = torch.empty_like(probs_sort).exponential_(1)
+    return torch.argmax(probs_sort / q, dim=-1, keepdim=True).to(dtype=torch.int64)
 
 
 def clear_benchmarks(self):
@@ -401,9 +413,10 @@ def speculative_generate(self,
     _enable_ipex = (_enable_ipex is not None) and (_enable_ipex.lower() == "true")
     if _enable_ipex:
         if not ((self.config.model_type == 'baichuan' and self.config.hidden_size == 5120) or
-                ('llama' in self.config.model_type)):
+                ('llama' in self.config.model_type) or
+                ("mistral" in self.config.model_type)):
             invalidInputError(False, "BigDL Speculative Decoding with IPEX BF16 only supports \
-                                      Llama and Baichuan2-13b models currently.")
+                                      Llama, Baichuan2-13b and Mistral models currently.")
 
     tmp_matchness = 0
     e2e_tic = 0.0
@@ -495,6 +508,9 @@ def speculative_generate(self,
                 draft_past_key_values = past_key_values
             draft_generate_ids[:, 0] = current_input_ids.squeeze()
             tic = time.time()
+            random_probs = None
+            if generation_config.do_sample:
+                random_probs = torch.rand(max_step_draft, device=self.device, dtype=self.dtype)
             # Draft model auto-regressively generate k tokens
             # Early stop when prob less then th_stop_draft
             delta_attention_mask = [[1] for _ in range(batch_size)]
@@ -636,9 +652,29 @@ def speculative_generate(self,
                                               position_ids=position_ids,
                                               past_key_values=past_key_values,
                                               )
+                elif "mistral" in self.config.model_type:
+                    past_key_value_len = past_key_values[0][0].shape[2]
+                    seq_len = drafted_input_ids.shape[1]
+                    position_ids = torch.arange(past_key_value_len,
+                                                seq_len + past_key_value_len,
+                                                dtype=torch.long,
+                                                device=drafted_input_ids.device)
+                    position_ids = position_ids.unsqueeze(0).view(-1, seq_len)
+                    output = self.trace_graph(input_ids=drafted_input_ids,
+                                              attention_mask=cur_attention_mask,
+                                              past_key_values=past_key_values,
+                                              position_ids=position_ids,
+                                              )
                 logits = output[0]
                 past_key_values = output[1]
             else:
+                forward_args = {
+                    "input_ids": drafted_input_ids,
+                    "past_key_values": past_key_values,
+                    "attention_mask": cur_attention_mask,
+                    "return_dict": True,
+                    "use_cache": True,
+                }
                 if self.config.model_type == "chatglm":
                     past_key_value_len = past_key_values[0][0].shape[0]
                     position_ids = torch.arange(drafted_input_ids.shape[1], dtype=torch.long,
@@ -672,9 +708,13 @@ def speculative_generate(self,
             for i in range(logits.size(1)):
                 logits[:, i, :] = logits_processor(temp_input_ids[:, :input_ids.size(1)+step+i],
                                                    logits[:, i, :])
-            output_ids = sample(logits, do_sample=generation_config.do_sample,
-                                top_k=generation_config.top_k, top_p=generation_config.top_p,
-                                temperature=generation_config.temperature)
+            if generation_config.do_sample:
+                target_probs = logits_to_probs(logits,
+                                               top_k=generation_config.top_k,
+                                               top_p=generation_config.top_p,
+                                               temperature=generation_config.temperature)
+            else:
+                output_ids = greedy(logits)
             if self.device.type == 'xpu':
                 torch.xpu.synchronize()
             toc = time.time()
