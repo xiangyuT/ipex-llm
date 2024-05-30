@@ -228,10 +228,14 @@ class PipelineBaseModel(nn.Module):
 
 
 def load_model(checkpoint):
-    from llama_models import LlamaForCausalLM
     if 'llama' in checkpoint.lower():
+        from llama_models import LlamaForCausalLM
         model = LlamaForCausalLM.from_pretrained(checkpoint, low_cpu_mem_usage=True, torch_dtype=torch.float16)
+    elif 'qwen' in checkpoint.lower():
+        from qwen2_models import Qwen2ForCausalLM
+        model = Qwen2ForCausalLM.from_pretrained(checkpoint, low_cpu_mem_usage=True, torch_dtype=torch.float16)
     return model
+
 
 from pydantic import BaseModel
 class BatchTask(BaseModel):
@@ -289,6 +293,12 @@ class ModelRunner:
         self.waiting_requests = asyncio.Queue()
         self.send_buff = None
         self.dict_lock = threading.Lock()
+        
+        self.token_send_times = {}
+        self.token_recv_times = {}
+        self.token_broadcast_times = {}
+
+        self.counter = 0
 
                 
     # def generate(self, input_ids=None, max_tokens=5, attention_mask=None):
@@ -395,7 +405,10 @@ class ModelRunner:
 
         self.input_ids_dict[new_batch.batch_id] = input_ids
         self.token_times[new_batch.batch_id] = [time.perf_counter()]
-        # self.attention_mask_dict[new_batch.batch_id] = attention_mask
+
+        self.token_send_times[new_batch.batch_id] = []
+        self.token_recv_times[new_batch.batch_id] = []
+        self.token_broadcast_times[new_batch.batch_id] = []
 
         return new_batch
 
@@ -406,11 +419,22 @@ class ModelRunner:
         self.token_times.pop(cur_id, None)
         # self.attention_mask_dict.pop(cur_id, None)
         self.past_key_values_dict.pop(cur_id, None)
+
+        self.token_send_times.pop(cur_id, None)
+        self.token_recv_times.pop(cur_id, None)
+        self.token_broadcast_times.pop(cur_id, None)
         # torch.xpu.empty_cache()
 
 
     async def process_step(self, tokenizer, result_dict):
+        # await asyncio.sleep(0.1)
         cur_batch = None
+        
+        send_time = 0
+        recv_time = 0
+        broadcast_time = 0
+        total_time = 0
+        st = time.perf_counter()
 
         if self.rank == 0:
             if self.on_going_batches[0] is not None:
@@ -429,9 +453,15 @@ class ModelRunner:
             if (cur_batch is not None) and (not cur_batch.stopped) and (cur_input is None):
                 cur_id = cur_batch.batch_id
                 next_ids = torch.empty((cur_batch.batch_size, 1,), device=f'xpu:{self.rank}', dtype=torch.int64)
-                # logger.info(f"rank: {self.rank}, recv: {next_ids.shape}")
-                dist.recv(next_ids, src=self.pre_rank)
                 
+                # await asyncio.sleep(0.017)
+                self.counter = self.counter + 1
+                recv_st = time.perf_counter()
+                logger.info(f"rank: {self.rank} {self.counter}, recv: {next_ids.shape}, {recv_st}")
+                dist.recv(next_ids, src=self.pre_rank)
+                recv_ed = time.perf_counter()
+                recv_time = recv_ed - recv_st
+                self.token_recv_times[cur_id].append(recv_time)
                 if self.tokens.get(cur_id, None) is None:
                     self.tokens[cur_id] = []
 
@@ -458,6 +488,7 @@ class ModelRunner:
                     first_token = cur_times[1] - cur_times[0]
                     next_token = (cur_times[-1] - cur_times[1]) / (len(self.tokens[cur_id]) - 1)
                     logger.info(f"First token latency: {first_token}, next token latency: {next_token}")
+                    logger.info(f"rank: {self.rank}, Send time: {sum(self.token_send_times[cur_id])}, Recv time: {sum(self.token_recv_times[cur_id])}, broadcast: {sum(self.token_broadcast_times[cur_id])}")
                     self.clear_batch(cur_id)
                     cur_batch.stopped = True
             else:
@@ -466,28 +497,71 @@ class ModelRunner:
 
             if self.send_buff is not None:
                 # logger.info(f"rank: {self.rank}, send: {self.send_buff.shape}")
+                send_st = time.perf_counter()
                 dist.send(self.send_buff, dst=self.next_rank)
-            dist.broadcast_object_list([cur_batch], src=0)
+                send_ed = time.perf_counter()
+                send_time = send_ed - send_st
                 
+            broadcast_st = time.perf_counter()
+            dist.broadcast_object_list([cur_batch], src=0)
+            broadcast_ed = time.perf_counter()
+            broadcast_time = broadcast_ed - broadcast_st
+
+            if cur_batch is not None:
+                cur_id = cur_batch.batch_id
+                if self.token_send_times.get(cur_id) is not None:
+                    self.token_send_times[cur_id].append(send_time)
+                    self.token_broadcast_times[cur_id].append(broadcast_time)
+
+            if send_time + recv_time + broadcast_time > 0.001:
+                logger.info(f"rank: {self.rank}, Send time: {send_time}, Recv time: {recv_time}, boradcast: {broadcast_time}")
         else:
+            send_time = 0
+            recv_time = 0
+            broadcast_time = 0
             batch_list = [None]
+
+            if self.send_buff is not None:
+                self.counter = self.counter + 1
+                send_st = time.perf_counter()
+                logger.info(f"rank: {self.rank} {self.counter}, send: {self.send_buff.shape}, {send_st}")
+                dist.send(self.send_buff, dst=self.next_rank)
+                send_ed = time.perf_counter()
+                send_time = send_ed - send_st
+
+            broadcast_st = time.perf_counter()
             dist.broadcast_object_list(batch_list, src=0)
+            broadcast_ed = time.perf_counter()
+            broadcast_time = broadcast_ed - broadcast_st
 
             cur_batch = batch_list[0]
             cur_input = None
 
-            if self.send_buff is not None:
-                # logger.info(f"rank: {self.rank}, send: {self.send_buff.shape}")
-                dist.send(self.send_buff, dst=self.next_rank)
-
             if cur_batch is not None:
                 if cur_batch.stopped:
+                    cur_id = cur_batch.batch_id
+                    logger.info(f"rank: {self.rank}, Send time: {sum(self.token_send_times[cur_id])}, Recv time: {sum(self.token_recv_times[cur_id])}, broadcast: {sum(self.token_broadcast_times[cur_id])}")
                     self.clear_batch(cur_batch.batch_id)
+                
                 else:
                     cur_len = cur_batch.input_len
                     cur_input = torch.empty((cur_batch.batch_size, cur_len, self.hidden_size,), device=f'xpu:{self.rank}', dtype=self.dtype)
                     # logger.info(f"rank: {self.rank}, recv: {cur_input.shape}")
+                    recv_st = time.perf_counter()
                     dist.recv(cur_input, src=self.pre_rank)
+                    recv_ed = time.perf_counter()
+                    recv_time = recv_ed - recv_st
+                    cur_id = cur_batch.batch_id
+                    if self.token_recv_times.get(cur_id) is None:
+                        self.token_recv_times[cur_id] = []
+                    if self.token_broadcast_times.get(cur_id) is None:
+                        self.token_broadcast_times[cur_id] = []
+                    if self.token_send_times.get(cur_id) is None:
+                        self.token_send_times[cur_id] = []
+
+                    self.token_recv_times[cur_id].append(recv_time)
+                    self.token_broadcast_times[cur_id].append(broadcast_time)
+                    self.token_send_times[cur_id].append(send_time)
 
                 # if self.attention_mask_dict.get(cur_batch.batch_id, None) is None:
                 #     self.attention_mask_dict[cur_batch.batch_id] = make_attention_mask(cur_batch.prompt_lengths)
@@ -504,6 +578,7 @@ class ModelRunner:
             self.send_buff = output
         else:
             self.send_buff = None
+
         if self.rank == 0:
             self.on_going_batches[:-1] = self.on_going_batches[1:]
             self.on_going_batches[self.world_size - 1] = cur_batch
