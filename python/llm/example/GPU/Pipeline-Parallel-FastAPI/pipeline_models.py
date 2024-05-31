@@ -330,7 +330,7 @@ class ModelRunner:
     #     return output_ids
 
 
-    def model_step(self, input, cur_batch):
+    async def model_step(self, input, cur_batch):
         if cur_batch is None or cur_batch.stopped or input is None:
             return None
         
@@ -357,7 +357,8 @@ class ModelRunner:
             return output.last_hidden_state
         else:
             # logger.info(f"logits: {output.logits.shape}")
-            return output.logits
+            logits = output.logits
+            return torch.argmax(logits[:, -1:, :], dim=-1)
 
     
     def is_initialized(self):
@@ -413,9 +414,13 @@ class ModelRunner:
         cur_batch = None
 
         if self.rank == 0:
+            
             if self.send_buff is not None:
                 # logger.info(f"rank: {self.rank}, send: {self.send_buff.shape}")
-                dist.send(self.send_buff, dst=self.next_rank)
+                cur_send_buff = await self.send_buff
+                if cur_send_buff is not None:
+                    dist.send(cur_send_buff, dst=self.next_rank)
+                self.send_buff = None
 
             if self.on_going_batches[0] is not None:
                 cur_batch = self.on_going_batches[0]
@@ -474,7 +479,10 @@ class ModelRunner:
         else:
             if self.send_buff is not None:
                 # logger.info(f"rank: {self.rank}, send: {self.send_buff.shape}")
-                dist.send(self.send_buff, dst=self.next_rank)
+                cur_send_buff = await self.send_buff
+                if cur_send_buff is not None:
+                    dist.send(cur_send_buff, dst=self.next_rank)
+                self.send_buff = None
 
             batch_list = [None]
             dist.broadcast_object_list(batch_list, src=0)
@@ -497,15 +505,15 @@ class ModelRunner:
         # if self.rank == 0:
         #     logger.info(f"rank: {self.rank}, {batch_list}")
         
-        output = self.model_step(cur_input, cur_batch)
-        if output is not None and self.rank == self.world_size - 1:
-            output = torch.argmax(output[:, -1:, :], dim=-1)
+        self.send_buff = self.model_step(cur_input, cur_batch)
+        # if output is not None and self.rank == self.world_size - 1:
+        #     output = torch.argmax(output[:, -1:, :], dim=-1)
 
-        if output is not None:
-            # dist.send(output, dst=self.next_rank)
-            self.send_buff = output
-        else:
-            self.send_buff = None
+        # if output is not None:
+        #     # dist.send(output, dst=self.next_rank)
+        #     self.send_buff = output
+        # else:
+        #     self.send_buff = None
         if self.rank == 0:
             self.on_going_batches[:-1] = self.on_going_batches[1:]
             self.on_going_batches[self.world_size - 1] = cur_batch
