@@ -58,6 +58,14 @@ Modify the `model` and `served_model_name` in the script so that it fits your re
 
 Then start the service using `bash /llm/start-vllm-service.sh`, the following message should be print if the service started successfully.
 
+```bash
+source ipex-llm-init -t
+export OMP_NUM_THREADS=48 # based on your CPU socket core numbers
+
+export VLLM_CPU_KVCACHE_SPACE=16 # 16G, based on your available RAM
+bash /llm/start-vllm-service.sh
+```
+
 If the service have booted successfully, you should see the output similar to the following figure:
 
 <a href="https://llm-assets.readthedocs.io/en/latest/_images/start-vllm-service.png" target="_blank">
