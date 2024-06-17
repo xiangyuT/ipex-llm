@@ -46,10 +46,13 @@ def chatglm4_model_forward(
     use_cache = use_cache if use_cache is not None else self.config.use_cache
     return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-    batch_size, seq_length = input_ids.shape
-
     if inputs_embeds is None:
+        batch_size, seq_length = input_ids.shape
         inputs_embeds = self.embedding(input_ids)
+    else:
+        # inputs_embeds = inputs_embeds.transpose(0, 1)
+        seq_length, batch_size, _ = inputs_embeds.shape
+        input_ids = torch.empty((batch_size, seq_length), device=inputs_embeds.device)
 
     if full_attention_mask is None:
         if (attention_mask is not None and not attention_mask.all()) or\
@@ -234,3 +237,61 @@ def chatglm4_attention_forward(
     output = self.dense(attn_output)
 
     return output, past_key_value
+
+
+def chatglm4_encoder_forward(
+            self, hidden_states, attention_mask, rotary_pos_emb, kv_caches=None,
+            use_cache: Optional[bool] = True,
+            output_hidden_states: Optional[bool] = False,
+    ):
+        if not kv_caches:
+            kv_caches = [None for _ in range(self.num_layers)]
+        presents = () if use_cache else None
+
+        all_self_attentions = None
+        all_hidden_states = () if output_hidden_states else None
+        for index in range(self.num_layers):
+            if output_hidden_states:
+                all_hidden_states = all_hidden_states + (hidden_states,)
+
+            layer = self._get_layer(index)
+            if self.gradient_checkpointing and self.training:
+                layer_ret = torch.utils.checkpoint.checkpoint(
+                    layer,
+                    hidden_states,
+                    attention_mask,
+                    rotary_pos_emb,
+                    kv_caches[index],
+                    use_cache,
+                    use_reentrant=False
+                )
+            else:
+                layer_ret = layer(
+                    hidden_states,
+                    attention_mask,
+                    rotary_pos_emb,
+                    kv_cache=kv_caches[index],
+                    use_cache=use_cache
+                )
+            hidden_states, kv_cache = layer_ret
+            if use_cache:
+                presents = presents + (kv_cache,)
+            # if use_cache:
+            #     # token by token decoding, use tuple format
+            #     if kv_caches[0] is not None:
+            #         presents = presents + (kv_cache,)
+            #     # prefilling in decoding, use tensor format to save cuda memory
+            #     else:
+            #         if len(presents) == 0:
+            #             presents = kv_cache
+            #         else:
+            #             presents = torch.cat((presents, kv_cache.to(presents.device)), dim=0)
+
+        if output_hidden_states:
+            all_hidden_states = all_hidden_states + (hidden_states,)
+
+        # Final layer norm.
+        if self.post_layer_norm:
+            hidden_states = self.final_layernorm(hidden_states)
+
+        return hidden_states, presents, all_hidden_states, all_self_attentions

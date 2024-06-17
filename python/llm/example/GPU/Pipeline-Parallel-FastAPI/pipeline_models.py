@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 import torch.distributed as dist
 
 from typing import List, Optional, Tuple, Union, Iterator
@@ -10,6 +11,26 @@ import numpy as np
 import asyncio, uuid
 import threading
 from pydantic import BaseModel
+
+from ipex_llm.transformers.pipeline_parallel import DummyLayer, Dummy_DecoderLayer, Dummy_MLPLayer
+
+class Dummy_GLMEncoderLayer(nn.Module):
+    def __init__(self, *args):
+        super().__init__()
+        self.input_layernorm = DummyLayer()
+        self.mlp = Dummy_MLPLayer()
+
+    def forward(self, hidden_states, *args, **kwargs):
+        past_key_value = kwargs.get('past_key_value', None)
+        kv_cache = kwargs.get('kv_cache', None)
+        use_cache = kwargs.get('use_cache', False)
+        outputs = (hidden_states,)
+        if use_cache:
+            if kv_cache is not None:
+                outputs += (kv_cache,)
+            else:
+                outputs += (past_key_value,)
+        return outputs
 
 logger = logging.get_logger(__name__)
 
@@ -93,27 +114,27 @@ class ModelRunner:
                                                     pipeline_parallel_stages=my_size)
         # print(model)
 
-        # config_class = type(model.config).__name__
-        # if config_class == 'ChatGLMConfig':
-        #     model.config.num_hidden_layers = model.config.num_layers
-        #     nr_slices = my_size
-        #     slice_size = (model.config.num_layers + nr_slices - 1) // nr_slices
-        #     layer_start = slice_size * my_rank
-        #     layer_end  = layer_start + min(slice_size, model.config.num_layers - layer_start)
+        config_class = type(model.config).__name__
+        if config_class == 'ChatGLMConfig':
+            model.config.num_hidden_layers = model.config.num_layers
+            nr_slices = my_size
+            slice_size = (model.config.num_layers + nr_slices - 1) // nr_slices
+            layer_start = slice_size * my_rank
+            layer_end  = layer_start + min(slice_size, model.config.num_layers - layer_start)
 
-        #     for i in range(model.config.num_layers):
-        #         if i < layer_start or i >= layer_end:
-        #             model.transformer.encoder.layers[i] = Dummy_DecoderLayer()
-        #         else:
-        #             pass
-        #             # align layer_idx and len(past_key_values), otherwise abnormal output
-        #             # model._modules['encoder'].layers[i].self_attention.layer_idx = i - layer_start
-        #             # model.transformer.encoder.layers[i].self_attention.layer_idx = i - layer_start
+            for i in range(model.config.num_layers):
+                if i < layer_start or i >= layer_end:
+                    model.transformer.encoder.layers[i] = Dummy_GLMEncoderLayer()
+                else:
+                    pass
+                    # align layer_idx and len(past_key_values), otherwise abnormal output
+                    # model._modules['encoder'].layers[i].self_attention.layer_idx = i - layer_start
+                    # model.transformer.encoder.layers[i].self_attention.layer_idx = i - layer_start
 
-        #         if my_rank != 0:
-        #             model.transformer.embedding = DummyLayer()
-        #         if my_rank != my_size - 1:
-        #             model.transformer.output_layer = DummyLayer()
+                if my_rank != 0:
+                    model.transformer.embedding = DummyLayer()
+                if my_rank != my_size - 1:
+                    model.transformer.output_layer = DummyLayer()
                     
         # else:
         #     nr_slices = my_size
