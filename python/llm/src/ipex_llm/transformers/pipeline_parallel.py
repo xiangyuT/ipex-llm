@@ -81,6 +81,9 @@ def pipeline_parallel(model, pipeline_parallel_stages):
         pipeline_parallel_stages
 
     local_rank = dist.get_rank()
+
+    global layer_start
+    global layer_end
     layer_start = slice_size * local_rank
     layer_end = layer_start + min(slice_size, model.config.num_hidden_layers - layer_start)
 
@@ -146,6 +149,9 @@ def pipeline_parallel_generate(self,
     pre_rank = (local_rank - 1) % self.pipeline_parallel_stages
     next_rank = (local_rank + 1) % self.pipeline_parallel_stages
 
+    global layer_start
+    global layer_end
+
     self.first_token_time = 0
     self.next_token_time = []
 
@@ -168,7 +174,7 @@ def pipeline_parallel_generate(self,
                            past_key_values=_past_key_values, use_cache=True)
         else:
             inputs_embeds = torch.empty(_input_ids.shape + (self.config.hidden_size,),
-                                        device=f'xpu:{local_rank}', dtype=torch.float32)
+                                        device=f'xpu:{local_rank}', dtype=self.dtype)
             dist.recv(inputs_embeds, src=pre_rank)
             outputs = self(input_ids=None, inputs_embeds=inputs_embeds,
                            past_key_values=_past_key_values, use_cache=True)
@@ -178,13 +184,22 @@ def pipeline_parallel_generate(self,
             next_ids = torch.argmax(logits[:, -1:, :], dim=-1)
             dist.broadcast(next_ids, src=local_rank)
         else:
-            dist.send(outputs[0], dst=next_rank)
+            dist.send(outputs[0].to(self.dtype), dst=next_rank)
             next_ids = torch.empty((bs, 1), device=f'xpu:{local_rank}', dtype=torch.int64)
             dist.broadcast(next_ids, src=self.pipeline_parallel_stages - 1)
 
         _input_ids = next_ids
         output_ids = torch.cat([output_ids, next_ids], dim=-1)
-        _past_key_values = outputs.past_key_values
+
+        if isinstance(outputs.past_key_values, tuple) and local_rank != 0:
+            value_placeholder = torch.empty_like((outputs.past_key_values)[-1][0])
+            past_key_values_placeholder = tuple(
+                (value_placeholder, value_placeholder) for _ in range(layer_start)
+            ) + (outputs.past_key_values)[layer_start:]
+            _past_key_values = past_key_values_placeholder
+        else:
+            _past_key_values = outputs.past_key_values
+
         toc = time.time()
         if step == 0:
             self.first_token_time = toc - tic
