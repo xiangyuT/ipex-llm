@@ -33,6 +33,8 @@ class BatchTask(BaseModel):
     prompt_lengths: List[int]
     stopped: bool
 
+    prefilled_index: int
+
 
 def make_attention_mask(prompt_lengths):
     max_length = max(prompt_lengths)
@@ -43,7 +45,7 @@ def make_attention_mask(prompt_lengths):
 
 class ModelRunner:
     
-    def __init__(self, checkpoint, rank, world_size, low_bit, max_num_seqs):
+    def __init__(self, checkpoint, rank, world_size, low_bit, max_num_seqs, max_prefilled_seqs = 0):
 
         self.pp_config = PPConfig(rank, world_size)
         
@@ -79,6 +81,8 @@ class ModelRunner:
         self.model_name = checkpoint
 
         self.layer_start = 0
+        self.layer_end = 0
+        self.max_prefilled_seqs = max_prefilled_seqs
 
 
     def load_model(self, model_path, my_rank, my_size, low_bit='sym_int4'):
@@ -91,6 +95,11 @@ class ModelRunner:
                                                     trust_remote_code=True,
                                                     use_cache=True,
                                                     pipeline_parallel_stages=my_size)
+        nr_slices = my_size
+        slice_size = (model.config.num_hidden_layers + nr_slices - 1) // nr_slices
+        self.layer_start = slice_size * my_rank
+        self.layer_end  = self.layer_start + min(slice_size, model.config.num_hidden_layers - self.layer_start)
+
         # print(model)
 
         # config_class = type(model.config).__name__
@@ -153,6 +162,24 @@ class ModelRunner:
             inputs_embeds = input
         
         # logger.info(f"{self.rank}, {_past_key_values}")
+        partial_prefill = False
+
+        if self.max_prefilled_seqs == 0:
+            pass
+        else:
+            cur_input_start = cur_batch.prefilled_index
+            cur_input_end = cur_input_start + self.max_prefilled_seqs
+            cur_input_end = min(cur_input_end, cur_batch.batch_size)
+            if cur_input_start < cur_batch.batch_size:
+                partial_prefill = True
+                if input_ids is not None:
+                    input_ids = input_ids[cur_input_start:cur_input_end]
+                else:
+                    inputs_embeds = inputs_embeds[cur_input_start:cur_input_end]
+                attention_mask = attention_mask[cur_input_start:cur_input_end]
+                tmp_past_key_values = _past_key_values
+                _past_key_values = None
+
         output = self.model(
             input_ids=input_ids, 
             inputs_embeds=inputs_embeds,
@@ -161,20 +188,43 @@ class ModelRunner:
             use_cache=True,
             output_hidden_states=True,
         )
-        use_legacy_cache = not isinstance(output.past_key_values, Cache)
-        if use_legacy_cache and self.rank > 0:
-            if output.past_key_values[0] is None:
-                _past_key_values = list(output.past_key_values)
-                slice_size = (self.model.config.num_hidden_layers + self.world_size - 1) // self.world_size
-                layer_start = slice_size * self.rank
 
-                _past_key_values[0] = [torch.empty_like(output.past_key_values[layer_start][0])]
-                _past_key_values = tuple(_past_key_values)
+        use_legacy_cache = isinstance(output.past_key_values, Tuple)
+        if not partial_prefill:
+            if use_legacy_cache and self.rank > 0:
+                if output.past_key_values[0] is None:
+                    _past_key_values = list(output.past_key_values)
+                    slice_size = (self.model.config.num_hidden_layers + self.world_size - 1) // self.world_size
+                    layer_start = slice_size * self.rank
+
+                    _past_key_values[0] = [torch.empty_like(output.past_key_values[layer_start][0])] * 2
+                    _past_key_values = tuple(_past_key_values)
+                else:
+                    _past_key_values = output.past_key_values
             else:
                 _past_key_values = output.past_key_values
+            self.past_key_values_dict[cur_id] = _past_key_values
         else:
-            _past_key_values = output.past_key_values
-        self.past_key_values_dict[cur_id] = _past_key_values
+            # TODO: add use_legacy_cache check for seq length
+            cur_batch.prefilled_index = cur_input_end
+            if use_legacy_cache:
+                if tmp_past_key_values is None:
+                    tmp_past_key_values = output.past_key_values
+                else:
+                    tmp_past_key_values = torch.cat((tmp_past_key_values, output.past_key_values), dim=0)
+            else:
+                for layer_idx in range(self.layer_start, self.layer_end):
+                    if tmp_past_key_values is None:
+                        tmp_past_key_values = output.past_key_values
+                    else:
+                        tmp_past_key_values.key_cache[layer_idx] = torch.cat([tmp_past_key_values.key_cache[layer_idx],
+                                                                              output.past_key_values.key_cache[layer_idx]], dim=0)
+                        tmp_past_key_values.value_cache[layer_idx] = torch.cat([tmp_past_key_values.value_cache[layer_idx],
+                                                                              output.past_key_values.value_cache[layer_idx]], dim=0)
+
+            self.past_key_values_dict[cur_id] = tmp_past_key_values
+
+
         if not self.pp_config.is_tail:
             return output.hidden_states[-1]
         else:
@@ -208,6 +258,7 @@ class ModelRunner:
             input_len=input_ids.size(1),
             prompt_lengths=[sum(attention_mask[i,:]) for i in range(input_ids.size(0))],
             stopped=False,
+            prefilled_index=0,
         )
 
         self.input_ids_dict[new_batch.batch_id] = input_ids
