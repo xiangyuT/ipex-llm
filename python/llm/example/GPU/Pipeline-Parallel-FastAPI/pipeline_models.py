@@ -34,6 +34,7 @@ class BatchTask(BaseModel):
     stopped: bool
 
     prefilled_index: int
+    partial_prefilling: int
 
 
 def make_attention_mask(prompt_lengths):
@@ -83,6 +84,7 @@ class ModelRunner:
         self.layer_start = 0
         self.layer_end = 0
         self.max_prefilled_seqs = max_prefilled_seqs
+        self.partial_output_dict = {}
 
 
     def load_model(self, model_path, my_rank, my_size, low_bit='sym_int4'):
@@ -153,6 +155,7 @@ class ModelRunner:
         cur_id = cur_batch.batch_id
         _past_key_values = self.past_key_values_dict.get(cur_id, None)
         attention_mask = make_attention_mask(cur_batch.prompt_lengths)
+        print(attention_mask.shape)
 
         if self.rank == 0:
             input_ids = input
@@ -161,7 +164,7 @@ class ModelRunner:
             input_ids = None
             inputs_embeds = input
         
-        # logger.info(f"{self.rank}, {_past_key_values}")
+        logger.info(f"{self.rank}, {cur_batch}")
         partial_prefill = False
 
         if self.max_prefilled_seqs == 0:
@@ -171,15 +174,22 @@ class ModelRunner:
             cur_input_end = cur_input_start + self.max_prefilled_seqs
             cur_input_end = min(cur_input_end, cur_batch.batch_size)
             if cur_input_start < cur_batch.batch_size:
-                partial_prefill = True
-                if input_ids is not None:
-                    input_ids = input_ids[cur_input_start:cur_input_end]
+                if self.rank == 0:
+                    partial_prefill = True
+                    cur_batch.partial_prefilling = cur_input_end - cur_input_start
+                    if input_ids is not None:
+                        input_ids = input_ids[cur_input_start:cur_input_end]
+                    else:
+                        inputs_embeds = inputs_embeds[cur_input_start:cur_input_end]
+                    attention_mask = attention_mask[cur_input_start:cur_input_end]
+                    tmp_past_key_values = _past_key_values
+                    _past_key_values = None
                 else:
-                    inputs_embeds = inputs_embeds[cur_input_start:cur_input_end]
-                attention_mask = attention_mask[cur_input_start:cur_input_end]
-                tmp_past_key_values = _past_key_values
-                _past_key_values = None
+                    attention_mask = attention_mask[cur_input_start:cur_input_end]
+                    tmp_past_key_values = _past_key_values
+                    _past_key_values = None
 
+        print(attention_mask.shape)
         output = self.model(
             input_ids=input_ids, 
             inputs_embeds=inputs_embeds,
@@ -224,10 +234,26 @@ class ModelRunner:
 
             self.past_key_values_dict[cur_id] = tmp_past_key_values
 
+            _pre_output = self.partial_output_dict.get(cur_id, None)
+            if _pre_output is None:
+                if not self.pp_config.is_tail:
+                    _pre_output = output.hidden_states[-1]
+                else:
+                    _pre_output = output.logits
+            else:
+                if not self.pp_config.is_tail:
+                    _pre_output = torch.cat((_pre_output, output.hidden_states[-1]), dim=0)
+                else:
+                    _pre_output = torch.cat((_pre_output, output.logits), dim=0)
+            self.partial_output_dict = _pre_output
 
         if not self.pp_config.is_tail:
             return output.hidden_states[-1]
         else:
+            if partial_prefill and cur_batch.prefilled_index == cur_batch.batch_size:
+                _output = self.partial_output_dict.get(cur_id, None)
+                cur_batch.partial_prefilling = 0
+                return _output
             return output.logits
 
     
@@ -259,6 +285,7 @@ class ModelRunner:
             prompt_lengths=[sum(attention_mask[i,:]) for i in range(input_ids.size(0))],
             stopped=False,
             prefilled_index=0,
+            partial_prefilling=0,
         )
 
         self.input_ids_dict[new_batch.batch_id] = input_ids
@@ -298,7 +325,10 @@ class ModelRunner:
 
             if (cur_batch is not None) and (not cur_batch.stopped) and (cur_input is None):
                 cur_id = cur_batch.batch_id
-                next_ids = torch.empty((cur_batch.batch_size, 1,), device=f'xpu:{self.rank}', dtype=torch.int64)
+                if cur_batch.partial_prefilling:
+                    next_ids = torch.empty((cur_batch.partial_prefilling, 1,), device=f'xpu:{self.rank}', dtype=torch.int64)
+                else:
+                    next_ids = torch.empty((cur_batch.batch_size, 1,), device=f'xpu:{self.rank}', dtype=torch.int64)
                 # logger.info(f"rank: {self.rank}, recv: {next_ids.shape}")
                 dist.recv(next_ids, src=self.pre_rank)
                 
@@ -390,8 +420,12 @@ class ModelRunner:
                     self.clear_batch(cur_batch.batch_id)
                 else:
                     cur_len = cur_batch.input_len
-                    cur_input = torch.empty((cur_batch.batch_size, cur_len, self.hidden_size,), device=f'xpu:{self.rank}', dtype=self.dtype)
+                    
                     # logger.info(f"rank: {self.rank}, recv: {cur_input.shape}")
+                    if cur_batch.partial_prefilling:
+                        cur_input = torch.empty((cur_batch.partial_prefilling, cur_len, self.hidden_size,), device=f'xpu:{self.rank}', dtype=self.dtype)
+                    else:
+                        cur_input = torch.empty((cur_batch.batch_size, cur_len, self.hidden_size,), device=f'xpu:{self.rank}', dtype=self.dtype)
                     dist.recv(cur_input, src=self.pre_rank)
         
         output = self.model_step(cur_input, cur_batch)
