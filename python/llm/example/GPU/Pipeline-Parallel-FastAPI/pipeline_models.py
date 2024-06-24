@@ -374,7 +374,7 @@ class ModelRunner:
                 model._modules['model'].norm = DummyLayer()
                 model._modules['lm_head'] = DummyLayer()
 
-        model = model.to(f'xpu:{my_rank}')
+        model = model.eval().to(f'xpu:{my_rank}')
         return model
 
 
@@ -599,7 +599,7 @@ class ModelRunner:
                     self.clear_batch(cur_batch.batch_id)
                 else:
                     cur_len = cur_batch.input_len
-                    cur_input = torch.empty((cur_batch.batch_size, cur_len, self.hidden_size,), device=f'xpu:{self.rank}', dtype=self.dtype)
+                    cur_input = torch.empty((cur_batch.batch_size, self.hidden_size,), device=f'xpu:{self.rank}', dtype=self.dtype)
                     # logger.info(f"rank: {self.rank}, recv: {cur_input.shape}")
                     dist.recv(cur_input, src=self.pre_rank)
 
