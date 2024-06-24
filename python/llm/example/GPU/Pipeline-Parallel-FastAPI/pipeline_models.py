@@ -426,7 +426,7 @@ class ModelRunner:
             # return output.last_hidden_state
             # print(output.hidden_states[-1].shape)
             # return output.hidden_states[-1]
-            return output.logits
+            return output.logits.to(dtype=self.dtype)
         else:
             # logger.info(f"logits: {output.logits.shape}")
             return output.logits
@@ -599,7 +599,7 @@ class ModelRunner:
                     self.clear_batch(cur_batch.batch_id)
                 else:
                     cur_len = cur_batch.input_len
-                    cur_input = torch.empty((cur_batch.batch_size, self.hidden_size,), device=f'xpu:{self.rank}', dtype=self.dtype)
+                    cur_input = torch.empty((cur_batch.batch_size, cur_len, self.hidden_size,), device=f'xpu:{self.rank}', dtype=self.dtype)
                     # logger.info(f"rank: {self.rank}, recv: {cur_input.shape}")
                     dist.recv(cur_input, src=self.pre_rank)
 
