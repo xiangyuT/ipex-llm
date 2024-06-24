@@ -374,7 +374,7 @@ class ModelRunner:
                 model._modules['model'].norm = DummyLayer()
                 model._modules['lm_head'] = DummyLayer()
 
-        model = model.to(f'xpu:{my_rank}')
+        model = model.eval().to(f'xpu:{my_rank}')
         return model
 
 
