@@ -91,49 +91,7 @@ class ModelRunner:
                                                     trust_remote_code=True,
                                                     use_cache=True,
                                                     pipeline_parallel_stages=my_size).eval()
-        # print(model)
 
-        # config_class = type(model.config).__name__
-        # if config_class == 'ChatGLMConfig':
-        #     model.config.num_hidden_layers = model.config.num_layers
-        #     nr_slices = my_size
-        #     slice_size = (model.config.num_layers + nr_slices - 1) // nr_slices
-        #     layer_start = slice_size * my_rank
-        #     layer_end  = layer_start + min(slice_size, model.config.num_layers - layer_start)
-
-        #     for i in range(model.config.num_layers):
-        #         if i < layer_start or i >= layer_end:
-        #             model.transformer.encoder.layers[i] = Dummy_DecoderLayer()
-        #         else:
-        #             pass
-        #             # align layer_idx and len(past_key_values), otherwise abnormal output
-        #             # model._modules['encoder'].layers[i].self_attention.layer_idx = i - layer_start
-        #             # model.transformer.encoder.layers[i].self_attention.layer_idx = i - layer_start
-
-        #         if my_rank != 0:
-        #             model.transformer.embedding = DummyLayer()
-        #         if my_rank != my_size - 1:
-        #             model.transformer.output_layer = DummyLayer()
-                    
-        # else:
-        #     nr_slices = my_size
-        #     slice_size = (model.config.num_hidden_layers + nr_slices - 1) // nr_slices
-        #     layer_start = slice_size * my_rank
-        #     layer_end  = layer_start + min(slice_size, model.config.num_hidden_layers - layer_start)
-
-        #     for i in range(model.config.num_hidden_layers):
-        #         if i < layer_start or i >= layer_end:
-        #             model._modules['model'].layers[i] = Dummy_DecoderLayer()
-        #         else:
-        #             # align layer_idx and len(past_key_values), otherwise abnormal output
-        #             model._modules['model'].layers[i].self_attn.layer_idx = i - layer_start
-        #     if my_rank != 0:
-        #         model._modules['model'].embed_tokens = DummyLayer()
-        #     if my_rank != my_size - 1:
-        #         model._modules['model'].norm = DummyLayer()
-        #         model._modules['lm_head'] = DummyLayer()
-
-        # model = model.to(f'xpu:{my_rank}')
         return model
 
 
@@ -153,13 +111,14 @@ class ModelRunner:
             inputs_embeds = input
         
         # logger.info(f"{self.rank}, {_past_key_values}")
+        torch.xpu.empty_cache()
         output = self.model(
             input_ids=input_ids, 
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask, 
             past_key_values=_past_key_values,
             use_cache=True,
-            output_hidden_states=True,
+            output_hidden_states=False,
         )
         use_legacy_cache = not isinstance(output.past_key_values, Cache)
         if use_legacy_cache and self.rank > 0:
@@ -176,7 +135,7 @@ class ModelRunner:
             _past_key_values = output.past_key_values
         self.past_key_values_dict[cur_id] = _past_key_values
         if not self.pp_config.is_tail:
-            return output.hidden_states[-1]
+            return output.logits.to(dtype=self.dtype)
         else:
             return output.logits
 
