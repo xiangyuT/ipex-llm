@@ -9,7 +9,9 @@ source $basekit_root/setvars.sh --force
 source $basekit_root/ccl/latest/env/vars.sh --force
 
 export USE_XETLA=OFF
-export SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=2
+if [[ $KERNEL_VERSION != *"6.5"* ]]; then
+    export SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1
+fi
 export TORCH_LLM_ALLREDUCE=0
 
 export MODEL_PATH=YOUR_MODEL_PATH
