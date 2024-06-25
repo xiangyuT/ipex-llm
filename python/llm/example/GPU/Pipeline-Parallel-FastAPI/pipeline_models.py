@@ -395,13 +395,14 @@ class ModelRunner:
             inputs_embeds = input
         
         # logger.info(f"{self.rank}, {_past_key_values}")
+        torch.xpu.empty_cache()
         output = self.model(
             input_ids=input_ids, 
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask, 
             past_key_values=_past_key_values,
             use_cache=True,
-            output_hidden_states=True,
+            output_hidden_states=False,
         )
         use_legacy_cache = not isinstance(output.past_key_values, Cache)
         if use_legacy_cache and self.rank > 0:
@@ -424,7 +425,8 @@ class ModelRunner:
         if not self.pp_config.is_tail:
             # return output.last_hidden_state
             # print(output.hidden_states[-1].shape)
-            return output.hidden_states[-1]
+            # return output.hidden_states[-1]
+            return output.logits.to(dtype=self.dtype)
         else:
             # logger.info(f"logits: {output.logits.shape}")
             return output.logits
