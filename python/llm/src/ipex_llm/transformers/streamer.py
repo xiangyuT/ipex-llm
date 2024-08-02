@@ -84,9 +84,18 @@ class BatchTextIteratorStreamer(TextIteratorStreamer):
             elif len(text) > 0 and self._is_chinese_char(ord(text[-1])):
                 printable_text = text[self.print_len[idx]:]
                 self.print_len[idx] += len(printable_text)
+                self.token_cache[idx] = []
+                self.print_len[idx] = 0
             else:
-                printable_text = text[self.print_len[idx]:text.rfind(" ") + 1]
-                self.print_len[idx] += len(printable_text)
+                r_index = text.rfind(" ")
+                printable_text = text[self.print_len[idx]:r_index + 1]
+                if r_index > self.print_len[idx]:
+                    printable_text = text[self.print_len[idx]: r_index]
+                    self.token_cache[idx] = self.token_cache[idx][-1:]
+                    self.print_len[idx] = 0
+                else:
+                    printable_text = text[self.print_len[idx]: r_index]
+
             printable_texts.append(printable_text)
 
         self.on_finalized_text(printable_texts)
