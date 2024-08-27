@@ -28,17 +28,60 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
     VocabParallelEmbedding)
 from vllm.attention import AttentionMetadata
 from vllm.config import DeviceConfig
-from typing import Tuple
+from vllm.model_executor.sampling_metadata import SamplingMetadata
+from vllm.model_executor.parallel_utils.communication_op import tensor_model_parallel_gather
+
+from typing import Tuple, Optional, Union
+from ipex_llm.utils.common import invalidInputError
+from vllm.sequence import SamplerOutput
 
 
 def _sample_get_logits(
     self,
     hidden_states: torch.Tensor,
-    lm_head: VocabParallelEmbedding,
-    embedding_bias: Optional[torch.Tensor],
-) -> torch.Tensor:
-    # HINT: we do not support other types of quantization for now
-    logits = lm_head(hidden_states)
+    sampling_metadata: SamplingMetadata,
+) -> Optional[SamplerOutput]:
+    next_tokens = self.sampler(self.lm_head, hidden_states,
+                               sampling_metadata)
+    return next_tokens
+
+
+def _Qwen2_sample(
+    self,
+    hidden_states: torch.Tensor,
+    sampling_metadata: SamplingMetadata,
+) -> Optional[SamplerOutput]:
+    if self.config.tie_word_embeddings:
+        # Embedding layer is not optimized to LowBitLinear
+        lm_head_weight = self.model.embed_tokens.weight
+    else:
+        # This layer is optimized to LowBitLinear
+        lm_head_weight = self.lm_head
+    next_tokens = self.sampler(lm_head_weight, hidden_states,
+                               sampling_metadata)
+    return next_tokens
+
+
+def _Chatglm_sample(
+    self,
+    hidden_states: torch.Tensor,
+    sampling_metadata: SamplingMetadata,
+) -> Optional[SamplerOutput]:
+    next_tokens = self.sampler(self.transformer.output_layer, hidden_states,
+                               sampling_metadata)
+
+    return next_tokens
+
+
+def _sample_get_logits(self, hidden_states: torch.Tensor,
+                       embedding: Union[torch.nn.Module, torch.Tensor],
+                       embedding_bias: Optional[torch.Tensor]) -> torch.Tensor:
+    # For tie_word_embedding models, the embedding is not optimized as
+    # the low_bit_linear layer...
+    if isinstance(embedding, torch.Tensor):
+        logits = torch.matmul(hidden_states, embedding.t())
+    else:
+        logits = embedding(hidden_states)
     if embedding_bias is not None:
         logits += embedding_bias
     logits = tensor_model_parallel_gather(logits)
@@ -195,8 +238,8 @@ def _ipex_llm_convert(load_in_low_bit):
 
 def get_load_function(low_bit):
     def _ipex_llm_load_model(self) -> None:
-        _model_mlp_convert()
-        _model_attention_convert()
+        # _model_mlp_convert()
+        # _model_attention_convert()
         _model_sample_convert()
 
         # from vllm.utils import measure_device_memory
