@@ -29,7 +29,6 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 from vllm.attention import AttentionMetadata
 from vllm.config import DeviceConfig
 from vllm.model_executor.sampling_metadata import SamplingMetadata
-from vllm.model_executor.parallel_utils.communication_op import tensor_model_parallel_gather
 
 from typing import Tuple, Optional, Union
 from ipex_llm.utils.common import invalidInputError
@@ -250,7 +249,6 @@ def get_load_function(low_bit):
                 device_config=DeviceConfig("cpu"),
                 load_config=self.load_config,
                 lora_config=self.lora_config,
-                multimodal_config=self.multimodal_config,
                 parallel_config=self.parallel_config,
                 scheduler_config=self.scheduler_config,
                 cache_config=self.cache_config,
