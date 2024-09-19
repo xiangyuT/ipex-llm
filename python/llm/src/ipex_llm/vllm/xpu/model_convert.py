@@ -82,7 +82,6 @@ def get_load_function(low_bit):
                 device_config=DeviceConfig("cpu"),
                 load_config=self.load_config,
                 lora_config=self.lora_config,
-                multimodal_config=self.multimodal_config,
                 parallel_config=self.parallel_config,
                 scheduler_config=self.scheduler_config,
                 cache_config=self.cache_config,
