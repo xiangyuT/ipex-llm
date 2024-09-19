@@ -58,21 +58,25 @@ class IPEXLLMClass(LLM):
         tokenizer_revision: Optional[str] = None,
         seed: int = 0,
         gpu_memory_utilization: float = 0.9,
-        swap_space: int = 4,
+        swap_space: float = 4,
         cpu_offload_gb: float = 0,
-        enforce_eager: bool = False,
+        enforce_eager: Optional[bool] = None,
         max_context_len_to_capture: Optional[int] = None,
         max_seq_len_to_capture: int = 8192,
         disable_custom_all_reduce: bool = False,
-        load_in_low_bit: str = "sym_int4",
+        disable_async_output_proc: bool = False,
         **kwargs,
     ) -> None:
         if "disable_log_stats" not in kwargs:
             kwargs["disable_log_stats"] = True
-        removed_vision_keys = ("image_token_id", "image_feature_size",
-                               "image_input_shape", "image_input_type")
+        removed_vision_keys = (
+            "image_token_id",
+            "image_feature_size",
+            "image_input_shape",
+            "image_input_type",
+        )
         if any(k in kwargs for k in removed_vision_keys):
-            raise TypeError(  # noqa
+            raise TypeError(
                 "There is no need to pass vision-related arguments anymore.")
         engine_args = EngineArgs(
             model=model,
@@ -93,6 +97,7 @@ class IPEXLLMClass(LLM):
             max_context_len_to_capture=max_context_len_to_capture,
             max_seq_len_to_capture=max_seq_len_to_capture,
             disable_custom_all_reduce=disable_custom_all_reduce,
+            disable_async_output_proc=disable_async_output_proc,
             **kwargs,
         )
         self.llm_engine = IPEXLLMLLMEngine.from_engine_args(
