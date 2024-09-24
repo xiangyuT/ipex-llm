@@ -65,6 +65,7 @@ class IPEXLLMClass(LLM):
         max_seq_len_to_capture: int = 8192,
         disable_custom_all_reduce: bool = False,
         disable_async_output_proc: bool = False,
+        load_in_low_bit: str = "sym_int4",
         **kwargs,
     ) -> None:
         if "disable_log_stats" not in kwargs:
