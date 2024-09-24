@@ -40,7 +40,7 @@ from vllm.entrypoints.openai.protocol import (ChatCompletionRequest,
                                               TokenizeResponse,
                                               UnloadLoraAdapterRequest)
 from vllm.entrypoints.openai.rpc.client import AsyncEngineRPCClient
-from vllm.entrypoints.openai.rpc.server import run_rpc_server
+from ipex_llm.vllm.xpu.entrypoints.openai.rpc.server import run_rpc_server
 # yapf: enable
 from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
 from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
