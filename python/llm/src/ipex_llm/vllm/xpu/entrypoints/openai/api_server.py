@@ -108,7 +108,7 @@ async def build_async_engine_client(
     global async_engine_client
 
     async with build_async_engine_client_from_engine_args(
-            engine_args, args.disable_frontend_multiprocessing) as engine:
+            engine_args, args.disable_frontend_multiprocessing, args.load_in_low_bit) as engine:
 
         async_engine_client = engine  # type: ignore[assignment]
         yield engine
@@ -118,6 +118,7 @@ async def build_async_engine_client(
 async def build_async_engine_client_from_engine_args(
     engine_args: AsyncEngineArgs,
     disable_frontend_multiprocessing: bool = False,
+    load_in_low_bit: str = "",
 ) -> AsyncIterator[Optional[AsyncEngineClient]]:
     """
     Create AsyncEngineClient, either:
@@ -173,7 +174,7 @@ async def build_async_engine_client_from_engine_args(
         # so we need to spawn a new process
         rpc_server_process = context.Process(
             target=run_rpc_server,
-            args=(engine_args, UsageContext.OPENAI_API_SERVER, rpc_path))
+            args=(engine_args, UsageContext.OPENAI_API_SERVER, rpc_path, load_in_low_bit))
         rpc_server_process.start()
         logger.info("Started engine process with PID %d",
                     rpc_server_process.pid)

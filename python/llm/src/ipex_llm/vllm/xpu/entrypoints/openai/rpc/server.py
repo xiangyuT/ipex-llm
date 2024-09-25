@@ -30,10 +30,12 @@ CONFIG_TYPE = Union[ModelConfig, DecodingConfig, ParallelConfig,
 class AsyncEngineRPCServer:
 
     def __init__(self, async_engine_args: AsyncEngineArgs,
-                 usage_context: UsageContext, rpc_path: str):
+                 usage_context: UsageContext, rpc_path: str, load_in_low_bit: str):
         # Initialize engine first.
         self.engine = AsyncLLMEngine.from_engine_args(
-            async_engine_args, usage_context=usage_context)
+            async_engine_args, usage_context=usage_context,
+            load_in_low_bit=load_in_low_bit,
+        )
 
         # Initialize context.
         self.context = zmq.asyncio.Context()
@@ -233,6 +235,6 @@ async def run_server(server: AsyncEngineRPCServer):
 
 
 def run_rpc_server(async_engine_args: AsyncEngineArgs,
-                   usage_context: UsageContext, rpc_path: str):
-    server = AsyncEngineRPCServer(async_engine_args, usage_context, rpc_path)
+                   usage_context: UsageContext, rpc_path: str, load_in_low_bit: str):
+    server = AsyncEngineRPCServer(async_engine_args, usage_context, rpc_path, load_in_low_bit)
     uvloop.run(run_server(server))
