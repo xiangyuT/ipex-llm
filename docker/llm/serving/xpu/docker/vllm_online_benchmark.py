@@ -441,15 +441,21 @@ PROMPT = ENGLISH_PROMPT
 # 加载模型的 tokenizer
 from transformers import AutoTokenizer
 tokenizer = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
-input_ids = tokenizer.encode(PROMPT, return_tensors="pt")
+input_ids = tokenizer.encode(PROMPT, return_tensors="pt")[0]
 # print("old input_ids.shape:"+ str(input_ids.shape))
 
 # 限制输入长度为 input_length
-input_ids = input_ids[:, :input_length]
-# print("latest input_ids.shape:"+ str(input_ids.shape))
+if input_ids.size(0) < input_length:
+    current_length = len(input_ids)
+    repeat_times = (input_length + current_length - 1) // current_length
+    extended_list = input_ids.repeat(repeat_times)[:input_length]
+    input_ids = extended_list
+input_ids = input_ids[:input_length]
+
+print("latest input_ids.shape:"+ str(input_ids.size(0)))
 
 # 将截断后的 prompt 解码回来
-true_str = tokenizer.batch_decode(input_ids)[0]
+true_str = tokenizer.decode(input_ids)
 PROMPT = true_str
 
 max_batch=int(max_seq)
