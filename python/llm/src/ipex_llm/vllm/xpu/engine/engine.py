@@ -94,20 +94,20 @@ class IPEXLLMClass(LLM):
         quantization: Optional[str] = None,
         revision: Optional[str] = None,
         tokenizer_revision: Optional[str] = None,
-        seed: int = 0,
+        seed: Optional[int] = None,
         gpu_memory_utilization: float = 0.9,
         swap_space: float = 4,
         cpu_offload_gb: float = 0,
         enforce_eager: Optional[bool] = None,
         max_seq_len_to_capture: int = 8192,
         disable_custom_all_reduce: bool = False,
-        disable_async_output_proc: bool = True,
+        disable_async_output_proc: bool = False,
         hf_overrides: Optional[HfOverrides] = None,
-        mm_processor_kwargs: Optional[Dict[str, Any]]=None,
+        mm_processor_kwargs: Optional[dict[str, Any]] = None,
         # After positional args are removed, move this right below `model`
         task: TaskOption = "auto",
         override_pooler_config: Optional[PoolerConfig] = None,
-        compilation_config: Optional[Union[int, Dict[str, Any]]]=None,
+        compilation_config: Optional[Union[int, dict[str, Any]]]=None,
         load_in_low_bit: str = "sym_int4",
         **kwargs,
     ) -> None:
@@ -119,6 +119,13 @@ class IPEXLLMClass(LLM):
         '''
         if "disable_log_stats" not in kwargs:
             kwargs["disable_log_stats"] = True
+
+        if "worker_cls" in kwargs:
+            worker_cls = kwargs["worker_cls"]
+            # if the worker_cls is not qualified string name,
+            # we serialize it using cloudpickle to avoid pickling issues
+            if isinstance(worker_cls, type):
+                kwargs["worker_cls"] = cloudpickle.dumps(worker_cls)
 
         if compilation_config is not None:
             if isinstance(compilation_config, (int, dict)):
@@ -164,6 +171,7 @@ class IPEXLLMClass(LLM):
             load_in_low_bit=load_in_low_bit)
 
         self.request_counter = Counter()
+        self.default_sampling_params: Union[dict[str, Any], None] = None
 
     @staticmethod
     def get_engine_class() -> Type[LLMEngine]:
