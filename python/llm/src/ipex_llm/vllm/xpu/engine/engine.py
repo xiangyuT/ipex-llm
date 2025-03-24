@@ -58,6 +58,28 @@ class IPEXLLMAsyncLLMEngine(AsyncLLMEngine):
                                         start_engine_loop=start_engine_loop,
                                         usage_context=usage_context, stat_loggers=stat_loggers)
 
+    @classmethod
+    def from_vllm_config(
+        cls,
+        vllm_config: VllmConfig,
+        start_engine_loop: bool = True,
+        usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
+        stat_loggers: Optional[dict[str, StatLoggerBase]] = None,
+        disable_log_requests: bool = False,
+        disable_log_stats: bool = False,
+        load_in_low_bit: str = "sym_int4",
+    ) -> "AsyncLLMEngine":
+        _ipex_llm_convert(load_in_low_bit)
+        return super().from_vllm_config(
+            cls=cls,
+            vllm_config=vllm_config,
+            start_engine_loop=start_engine_loop,
+            usage_context=usage_context,
+            stat_loggers=stat_loggers,
+            disable_log_requests=disable_log_requests,
+            disable_log_stats=disable_log_stats,
+        )
+
 
 class IPEXLLMAsyncV1Engine(AsyncLLM):
 
@@ -79,6 +101,27 @@ class IPEXLLMAsyncV1Engine(AsyncLLM):
                                         start_engine_loop=start_engine_loop,
                                         usage_context=usage_context, stat_loggers=stat_loggers)
 
+    @classmethod
+    def from_vllm_config(
+        cls,
+        vllm_config: VllmConfig,
+        start_engine_loop: bool = True,
+        usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
+        stat_loggers: Optional[dict[str, StatLoggerBase]] = None,
+        disable_log_requests: bool = False,
+        disable_log_stats: bool = False,
+        load_in_low_bit: str = "sym_int4",
+    ) -> "AsyncLLM":
+        _ipex_llm_convert(load_in_low_bit)
+        return super().from_vllm_config(
+            cls=cls,
+            vllm_config=vllm_config,
+            start_engine_loop=start_engine_loop,
+            usage_context=usage_context,
+            stat_loggers=stat_loggers,
+            disable_log_requests=disable_log_requests,
+            disable_log_stats=disable_log_stats,
+        )
 
 class IPEXLLMClass(LLM):
     def __init__(
@@ -202,6 +245,23 @@ class IPEXLLMLLMV1Engine(V1LLMEngine):
                                         stat_loggers,
                                         enable_multiprocessing)
 
+    @classmethod
+    def from_vllm_config(
+        cls,
+        vllm_config: VllmConfig,
+        usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
+        stat_loggers: Optional[Dict[str, StatLoggerBase]] = None,
+        disable_log_stats: bool = False,
+        load_in_low_bit: str = "sym_int4",
+    ) -> "LLMEngine":
+        _ipex_llm_convert(load_in_low_bit)
+        return super().from_vllm_config(
+            cls=cls,
+            vllm_config=vllm_config,
+            usage_context=usage_context,
+            stat_loggers=stat_loggers,
+            disable_log_stats=disable_log_stats
+        )
 
 class IPEXLLMLLMEngine(LLMEngine):
     def __init__(self, *args, **kwargs):
@@ -220,6 +280,23 @@ class IPEXLLMLLMEngine(LLMEngine):
         _ipex_llm_convert(load_in_low_bit)
         return super().from_engine_args(engine_args, usage_context, stat_loggers)
 
+    @classmethod
+    def from_vllm_config(
+        cls,
+        vllm_config: VllmConfig,
+        usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
+        stat_loggers: Optional[Dict[str, StatLoggerBase]] = None,
+        disable_log_stats: bool = False,
+        load_in_low_bit: str = "sym_int4",
+    ) -> "LLMEngine":
+        _ipex_llm_convert(load_in_low_bit)
+        return super().from_vllm_config(
+            cls=cls,
+            vllm_config=vllm_config,
+            usage_context=usage_context,
+            stat_loggers=stat_loggers,
+            disable_log_stats=disable_log_stats
+        )
 
 class IPEXLLMMQLLMEngine(MQLLMEngine):
     @classmethod
@@ -227,6 +304,22 @@ class IPEXLLMMQLLMEngine(MQLLMEngine):
                          usage_context: UsageContext, ipc_path: str, load_in_low_bit: str):
         _ipex_llm_convert(load_in_low_bit)
         return super().from_engine_args(engine_args, usage_context, ipc_path)
+
+    @classmethod
+    def from_vllm_config(cls, vllm_config: VllmConfig,
+                         usage_context: UsageContext,
+                         disable_log_requests: bool, disable_log_stats: bool,
+                         ipc_path: str, load_in_low_bit: str) -> "MQLLMEngine":
+
+        _ipex_llm_convert(load_in_low_bit)
+        return super().from_vllm_config(
+            cls=cls,
+            vllm_config=vllm_config,
+            ipc_path=ipc_path,
+            usage_context=usage_context,
+            disable_log_requests=disable_log_requests
+            disable_log_stats=disable_log_stats,
+        )
 
 
 def run_mp_engine(engine_args: AsyncEngineArgs, usage_context: UsageContext,
