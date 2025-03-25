@@ -160,7 +160,7 @@ RUN set -eux && \
     pip install --upgrade cmake && \
     VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -v /llm/vllm && \
     pip install mpi4py fastapi uvicorn openai && \
-    pip install ray
+    pip install ray numba
 
 WORKDIR /llm/
 ENTRYPOINT ["bash", "/llm/start-vllm-service.sh"]
