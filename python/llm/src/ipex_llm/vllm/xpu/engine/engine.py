@@ -344,26 +344,34 @@ class IPEXLLMMQLLMEngine(MQLLMEngine):
             disable_log_stats=disable_log_stats,
         )
 
+from vllm.transformers_utils.config import (
+    maybe_register_config_serialize_by_value)
+def signal_handler(*_) -> None:
+    raise KeyboardInterrupt("MQLLMEngine terminated")
 
-def run_mp_engine(engine_args: AsyncEngineArgs, usage_context: UsageContext,
-                  ipc_path: str, load_in_low_bit: str, engine_alive):
-
-    def signal_handler(*_) -> None:
-        # Interrupt server on sigterm
-        raise KeyboardInterrupt("MQLLMEngine terminated")  # noqa
-
+def run_mp_engine(vllm_config: VllmConfig, usage_context: UsageContext,
+                  ipc_path: str, disable_log_stats: bool,
+                  disable_log_requests: bool, load_in_low_bit, engine_alive):
     try:
+        # Ensure we can serialize transformer config before spawning
+        maybe_register_config_serialize_by_value()
+
+        engine = IPEXLLMMQLLMEngine.from_vllm_config(
+            vllm_config=vllm_config,
+            usage_context=usage_context,
+            disable_log_stats=disable_log_stats,
+            disable_log_requests=disable_log_requests,
+            load_in_low_bit=load_in_low_bit,
+            ipc_path=ipc_path)
+
         signal.signal(signal.SIGTERM, signal_handler)
 
-        engine = IPEXLLMMQLLMEngine.from_engine_args(engine_args=engine_args,
-                                                     usage_context=usage_context,
-                                                     ipc_path=ipc_path,
-                                                     load_in_low_bit=load_in_low_bit)
         engine.start()
+
     except BaseException as e:
         logger.exception(e)
         engine_alive.value = False
-        raise e  # noqa
+        raise e
 
 if os.getenv("VLLM_USE_V1"):
     IPEXLLMAsyncLLMEngine = IPEXLLMAsyncV1Engine

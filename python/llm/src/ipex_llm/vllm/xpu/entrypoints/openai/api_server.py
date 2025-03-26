@@ -487,13 +487,7 @@ async def create_completion(request: CompletionRequest, raw_request: Request):
                             status_code=generator.code)
     elif isinstance(generator, CompletionResponse):
         return JSONResponse(content=generator.model_dump())
-    
-    
-    if flag is not None:
-        return StreamingResponse(content=stream_generator(generator, request, request_id), media_type="text/event-stream")
 
-    if flag is not None:
-        return StreamingResponse(content=stream_generator(generator, request, request_id), media_type="text/event-stream")
     return StreamingResponse(content=generator, media_type="text/event-stream")
 
 
