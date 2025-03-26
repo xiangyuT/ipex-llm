@@ -168,7 +168,7 @@ async def build_async_engine_client_from_engine_args(
                 "V1 is enabled, but got --disable-frontend-multiprocessing. "
                 "To disable frontend multiprocessing, set VLLM_USE_V1=0.")
 
-        from vllm.v1.engine.async_llm import AsyncLLM
+        from ipex_llm.vllm.xpu.engine import IPEXLLMAsyncV1Engine as AsyncLLM
         async_llm: Optional[AsyncLLM] = None
         try:
             async_llm = AsyncLLM.from_vllm_config(
