@@ -317,7 +317,7 @@ class IPEXLLMMQLLMEngine(MQLLMEngine):
             vllm_config=vllm_config,
             ipc_path=ipc_path,
             usage_context=usage_context,
-            disable_log_requests=disable_log_requests
+            disable_log_requests=disable_log_requests,
             disable_log_stats=disable_log_stats,
         )
 
