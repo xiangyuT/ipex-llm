@@ -31,9 +31,9 @@ from typing_extensions import assert_never
 import vllm.envs as envs
 from vllm.config import ModelConfig
 from vllm.engine.arg_utils import AsyncEngineArgs
-from vllm.engine.async_llm_engine import AsyncLLMEngine  # type: ignore
+from ipex_llm.vllm.xpu.engine import IPEXLLMAsyncLLMEngine as AsyncLLMEngine  # type: ignore
 from vllm.engine.multiprocessing.client import MQLLMEngineClient
-from vllm.engine.multiprocessing.engine import run_mp_engine
+from ipex_llm.vllm.xpu.engine import run_mp_engine
 from vllm.engine.protocol import EngineClient
 from vllm.entrypoints.chat_utils import load_chat_template
 from vllm.entrypoints.launcher import serve_http
@@ -175,7 +175,8 @@ async def build_async_engine_client_from_engine_args(
                 vllm_config=vllm_config,
                 usage_context=usage_context,
                 disable_log_requests=engine_args.disable_log_requests,
-                disable_log_stats=engine_args.disable_log_stats)
+                disable_log_stats=engine_args.disable_log_stats,
+                load_in_low_bit=load_in_low_bit)
             yield async_llm
         finally:
             if async_llm:
@@ -191,7 +192,8 @@ async def build_async_engine_client_from_engine_args(
                 vllm_config=vllm_config,
                 usage_context=usage_context,
                 disable_log_requests=engine_args.disable_log_requests,
-                disable_log_stats=engine_args.disable_log_stats)
+                disable_log_stats=engine_args.disable_log_stats,
+                load_in_low_bit=load_in_low_bit)
             yield engine_client
         finally:
             if engine_client and hasattr(engine_client, "shutdown"):
@@ -235,7 +237,7 @@ async def build_async_engine_client_from_engine_args(
             target=run_mp_engine,
             args=(vllm_config, UsageContext.OPENAI_API_SERVER, ipc_path,
                   engine_args.disable_log_stats,
-                  engine_args.disable_log_requests, engine_alive))
+                  engine_args.disable_log_requests, load_in_low_bit, engine_alive))
         engine_process.start()
         engine_pid = engine_process.pid
         assert engine_pid is not None, "Engine process failed to start."

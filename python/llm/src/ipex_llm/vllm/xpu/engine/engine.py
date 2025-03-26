@@ -38,6 +38,7 @@ logger = init_logger(__name__)
 
 
 class IPEXLLMAsyncLLMEngine(AsyncLLMEngine):
+    _is_converted = False
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -53,7 +54,9 @@ class IPEXLLMAsyncLLMEngine(AsyncLLMEngine):
     ) -> "AsyncLLMEngine":
         """Creates an async LLM engine from the engine arguments."""
         # Create the engine configs.
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_engine_args(engine_args=engine_args, engine_config=engine_config,
                                         start_engine_loop=start_engine_loop,
                                         usage_context=usage_context, stat_loggers=stat_loggers)
@@ -69,9 +72,10 @@ class IPEXLLMAsyncLLMEngine(AsyncLLMEngine):
         disable_log_stats: bool = False,
         load_in_low_bit: str = "sym_int4",
     ) -> "AsyncLLMEngine":
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_vllm_config(
-            cls=cls,
             vllm_config=vllm_config,
             start_engine_loop=start_engine_loop,
             usage_context=usage_context,
@@ -82,7 +86,7 @@ class IPEXLLMAsyncLLMEngine(AsyncLLMEngine):
 
 
 class IPEXLLMAsyncV1Engine(AsyncLLM):
-
+    _is_converted = False
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -96,7 +100,9 @@ class IPEXLLMAsyncV1Engine(AsyncLLM):
         load_in_low_bit: str = "sym_int4",
         stat_loggers: Optional[Dict[str, StatLoggerBase]]=None,  # noqa
     ) -> "AsyncLLM":
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_engine_args(engine_args=engine_args, engine_config=engine_config,
                                         start_engine_loop=start_engine_loop,
                                         usage_context=usage_context, stat_loggers=stat_loggers)
@@ -112,9 +118,10 @@ class IPEXLLMAsyncV1Engine(AsyncLLM):
         disable_log_stats: bool = False,
         load_in_low_bit: str = "sym_int4",
     ) -> "AsyncLLM":
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_vllm_config(
-            cls=cls,
             vllm_config=vllm_config,
             start_engine_loop=start_engine_loop,
             usage_context=usage_context,
@@ -209,6 +216,7 @@ class IPEXLLMClass(LLM):
         # Logic to switch between engines is done at runtime instead of import
         # to avoid import order issues
         self.engine_class = self.get_engine_class()
+        # print("!!! ", load_in_low_bit)
         self.llm_engine = self.engine_class.from_engine_args(
             engine_args, usage_context=UsageContext.LLM_CLASS,
             load_in_low_bit=load_in_low_bit)
@@ -224,6 +232,7 @@ class IPEXLLMClass(LLM):
 
 
 class IPEXLLMLLMV1Engine(V1LLMEngine):
+    _is_converted = False
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -239,7 +248,9 @@ class IPEXLLMLLMV1Engine(V1LLMEngine):
         """Creates an LLM engine from the engine arguments."""
         # Create the engine configs.
 
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_engine_args(engine_args,
                                         usage_context,
                                         stat_loggers,
@@ -254,9 +265,10 @@ class IPEXLLMLLMV1Engine(V1LLMEngine):
         disable_log_stats: bool = False,
         load_in_low_bit: str = "sym_int4",
     ) -> "LLMEngine":
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_vllm_config(
-            cls=cls,
             vllm_config=vllm_config,
             usage_context=usage_context,
             stat_loggers=stat_loggers,
@@ -264,6 +276,7 @@ class IPEXLLMLLMV1Engine(V1LLMEngine):
         )
 
 class IPEXLLMLLMEngine(LLMEngine):
+    _is_converted = False
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -277,7 +290,9 @@ class IPEXLLMLLMEngine(LLMEngine):
     ) -> "LLMEngine":
         """Creates an LLM engine from the engine arguments."""
         # Create the engine configs.
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_engine_args(engine_args, usage_context, stat_loggers)
 
     @classmethod
@@ -289,9 +304,10 @@ class IPEXLLMLLMEngine(LLMEngine):
         disable_log_stats: bool = False,
         load_in_low_bit: str = "sym_int4",
     ) -> "LLMEngine":
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_vllm_config(
-            cls=cls,
             vllm_config=vllm_config,
             usage_context=usage_context,
             stat_loggers=stat_loggers,
@@ -299,10 +315,16 @@ class IPEXLLMLLMEngine(LLMEngine):
         )
 
 class IPEXLLMMQLLMEngine(MQLLMEngine):
+    _is_converted = False
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     @classmethod
     def from_engine_args(cls, engine_args: AsyncEngineArgs,
                          usage_context: UsageContext, ipc_path: str, load_in_low_bit: str):
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_engine_args(engine_args, usage_context, ipc_path)
 
     @classmethod
@@ -311,9 +333,10 @@ class IPEXLLMMQLLMEngine(MQLLMEngine):
                          disable_log_requests: bool, disable_log_stats: bool,
                          ipc_path: str, load_in_low_bit: str) -> "MQLLMEngine":
 
-        _ipex_llm_convert(load_in_low_bit)
+        if not cls._is_converted:
+            _ipex_llm_convert(load_in_low_bit)
+            cls._is_converted = True
         return super().from_vllm_config(
-            cls=cls,
             vllm_config=vllm_config,
             ipc_path=ipc_path,
             usage_context=usage_context,

@@ -63,6 +63,8 @@ def _model_sample_convert():
 
 
 def _ipex_llm_convert(load_in_low_bit):
+    # import pdb
+    # pdb.set_trace()
     from vllm.worker.xpu_model_runner import XPUModelRunner
     from ipex_llm.vllm.xpu.ipex_llm_wrapper import get_ipex_llm_wrapper
     from ipex_llm.vllm.xpu.ipex_llm_v1_wrapper import get_ipex_llm_v1_wrapper
