@@ -150,12 +150,12 @@ def is_linear_module(module):
         if _VLLM_VERSION is None:
             _VLLM_VERSION = get_package_version('vllm')
         from vllm.model_executor.layers.linear import (
-            ColumnParallelLinear, RowParallelLinear, QKVParallelLinear, MergedColumnParallelLinear
+            ColumnParallelLinear, RowParallelLinear, QKVParallelLinear, MergedColumnParallelLinear, ReplicatedLinear
         )
         from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
         VLLM_LINEAR_LIST = [
             ColumnParallelLinear, RowParallelLinear, QKVParallelLinear,
-            MergedColumnParallelLinear,
+            MergedColumnParallelLinear, ReplicatedLinear,
         ]
         if 'xpu' in _VLLM_VERSION:
             VLLM_LINEAR_LIST.append(ParallelLMHead)
