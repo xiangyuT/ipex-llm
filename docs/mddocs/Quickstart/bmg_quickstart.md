@@ -23,7 +23,9 @@ This guide demonstrates how to install and use IPEX-LLM on the Intel Arc B-Serie
    3.3 [llama.cpp](#33-llamacpp)  
    3.4 [vLLM](#34-vllm)
 4. [Troubleshooting](#4-troubleshooting)  
-   4.1 [RuntimeError: could not create an engine](#41-runtimeerror-could-not-create-an-engine)
+   4.1 [RuntimeError: could not create an engine](#41-runtimeerror-could-not-create-an-engine)  
+   4.2 [Connection timeout error when installing the intel-graphics PPA](#42-connection-timeout-error-when-installing-the-intel-graphics-ppa)
+
 ---
 
 ## 1. Linux
@@ -67,27 +69,14 @@ conda activate llm
 With the `llm` environment active, install the appropriate `ipex-llm` package based on your use case:
 
 #### For PyTorch and HuggingFace:
-Install the `ipex-llm[xpu-arc]` package. Choose either the US or CN website for `extra-index-url`:
+Install the `ipex-llm[xpu_2.6]` package:
 
-- For **US**:
-  ```bash
-  pip install --pre --upgrade ipex-llm[xpu-arc] --extra-index-url https://pytorch-extension.intel.com/release-whl/stable/xpu/us/
-  ```
-
-- For **CN**:
-  ```bash
-  pip install --pre --upgrade ipex-llm[xpu-arc] --extra-index-url https://pytorch-extension.intel.com/release-whl/stable/xpu/cn/
-  ```
+```bash
+pip install --pre --upgrade ipex-llm[xpu_2.6] --extra-index-url https://download.pytorch.org/whl/xpu
+```
 
 #### For llama.cpp and Ollama:
-Install the `ipex-llm[cpp]` package.
-
-  ```bash
-  pip install --pre --upgrade ipex-llm[cpp] 
-  ```
-
-> [!NOTE]  
-> If you encounter network issues during installation, refer to the [troubleshooting guide](../Overview/install_gpu.md#install-ipex-llm-from-wheel-1) for alternative steps.
+You may use [Ollama Portable Zip](./ollama_portable_zip_quickstart.md#linux-quickstart) and [llama.cpp Portable Zip](./llamacpp_portable_zip_gpu_quickstart.md#linux-quickstart).
 
 ---
 
@@ -106,10 +95,9 @@ If your driver version is lower than `32.0.101.6449/32.0.101.101.6256`, update i
 Download and install Miniforge for Windows from the [official page](https://conda-forge.org/download/). After installation, create and activate a Python environment:
 
 ```cmd
-conda create -n llm python=3.11 libuv
+conda create -n llm python=3.11
 conda activate llm
 ```
-
 ---
 
 ### 2.2 Install IPEX-LLM
@@ -117,27 +105,15 @@ conda activate llm
 With the `llm` environment active, install the appropriate `ipex-llm` package based on your use case:
 
 #### For PyTorch and HuggingFace:
-Install the `ipex-llm[xpu-arc]` package. Choose either the US or CN website for `extra-index-url`:
+Install the `ipex-llm[xpu_2.6]` package:
 
-- For **US**:
-  ```cmd
-  pip install --pre --upgrade ipex-llm[xpu-arc] --extra-index-url https://pytorch-extension.intel.com/release-whl/stable/xpu/us/
-  ```
-
-- For **CN**:
-  ```cmd
-  pip install --pre --upgrade ipex-llm[xpu-arc] --extra-index-url https://pytorch-extension.intel.com/release-whl/stable/xpu/cn/
-  ```
+```bash
+pip install --pre --upgrade ipex-llm[xpu_2.6] --extra-index-url https://download.pytorch.org/whl/xpu
+```
 
 #### For llama.cpp and Ollama:
-Install the `ipex-llm[cpp]` package. 
 
-  ```cmd
-  pip install --pre --upgrade ipex-llm[cpp] 
-  ```
-
-> [!NOTE]  
-> If you encounter network issues while installing IPEX, refer to [this guide](../Overview/install_gpu.md#install-ipex-llm-from-wheel) for troubleshooting advice.
+You may use [Ollama Portable Zip](./ollama_portable_zip_quickstart.md#windows-quickstart) and [llama.cpp Portable Zip](./llamacpp_portable_zip_gpu_quickstart.md#windows-quickstart).
 
 ---
 
@@ -166,21 +142,24 @@ Run a Quick PyTorch Example:
    torch.Size([1, 1, 40, 40])
    ```
 
-For benchmarks and performance measurement, refer to the [Benchmark Quickstart guide](https://github.com/intel-analytics/ipex-llm/blob/main/docs/mddocs/Quickstart/benchmark_quickstart.md).
+> [!TIP]
+> Please refer to here ([Linux](./install_pytorch26_gpu.md#runtime-configurations-1) or [Windows](./install_pytorch26_gpu.md#runtime-configurations)) regarding runtime configurations for PyTorch with IPEX-LLM on B-Series GPU.
+
+For benchmarks and performance measurement, refer to the [Benchmark Quickstart guide](./benchmark_quickstart.md).
 
 ---
 
 ### 3.2 Ollama
 
-To integrate and run with **Ollama**, follow the [Ollama Quickstart guide](https://github.com/intel-analytics/ipex-llm/blob/main/docs/mddocs/Quickstart/ollama_quickstart.md).
+To integrate and run with **Ollama**, follow the [Ollama Quickstart guide](./ollama_portable_zip_quickstart.md).
 
 ### 3.3 llama.cpp
 
-For instructions on how to run **llama.cpp** with IPEX-LLM, refer to the [llama.cpp Quickstart guide](https://github.com/intel-analytics/ipex-llm/blob/main/docs/mddocs/Quickstart/llama_cpp_quickstart.md).
+For instructions on how to run **llama.cpp** with IPEX-LLM, refer to the [llama.cpp Quickstart guide](./llamacpp_portable_zip_gpu_quickstart.md).
 
 ### 3.4 vLLM
 
-To set up and run **vLLM**, follow the [vLLM Quickstart guide](https://github.com/intel-analytics/ipex-llm/blob/main/docs/mddocs/Quickstart/vLLM_quickstart.md).
+To set up and run **vLLM**, follow the [vLLM Quickstart guide](./vLLM_quickstart.md).
 
 ## 4. Troubleshooting
 
@@ -200,3 +179,18 @@ This will remove the conflicting environment variable and allow your program to 
 
 **Note:** This issue only occurs on Linux systems. It does not affect Windows environments.
 
+### 4.2 Connection timeout error when installing the intel-graphics PPA
+
+While [installting prerequisites on Linux](#11-install-prerequisites), if you encounter a connection timeout error when adding the intel-graphics PPA, consider disabling IPv6 first through:
+
+```bash
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+```
+
+Afterward, disconnect and reconnect your network adapter before attempting the installation again.
+
+> [!TIP]
+> - The disabling of IPv6 by the above command is temporary and will be reverted after a system reboot.
+> - You could find more information about this issue [here](https://github.com/intel/ipex-llm/issues/13112).

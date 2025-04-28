@@ -32,7 +32,7 @@ from ipex_llm.utils.common.log4Error import invalidInputError
 from ipex_llm.transformers.kv import DynamicNormalCache
 from ipex_llm.transformers.models.common import padding_mla_v_hd_base
 from ipex_llm.transformers.models.common import scaled_dot_product_attention
-from ipex_llm.transformers.models.utils import rotate_half
+from ipex_llm.transformers.models.utils import rotate_half, use_fuse_moe
 
 
 def padding_mla_v_hd(module: torch.nn.Module):
@@ -228,11 +228,11 @@ def deepseek_attention_forward(
             [k_nope, k_pe.expand([-1, self.num_heads, -1, -1])],
             dim=-1
         )
-        import xe_addons
         cos, sin = position_embeddings
-        xe_addons.rotary_two_with_cache_inplaced(query_states[:, :, :, self.qk_nope_head_dim:],
-                                                 key_states[:, :, :, self.qk_nope_head_dim:],
-                                                 cos, sin, True)
+        from ipex_llm.transformers.models.common import rotary_two_with_cache_inplaced
+        rotary_two_with_cache_inplaced(query_states[:, :, :, self.qk_nope_head_dim:],
+                                       key_states[:, :, :, self.qk_nope_head_dim:],
+                                       cos, sin, True)
     else:
         q_nope, q_pe = torch.split(
             q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
@@ -279,11 +279,11 @@ def fuse_gate_forward(self, x: torch.Tensor):
         )
         scores = logits.sigmoid()
 
-        import xe_addons
-        topk_idx, topk_weight = xe_addons.moe_group_topk(
+        from ipex_llm.transformers.models.common import moe_group_topk
+        topk_idx, topk_weight = moe_group_topk(
             scores, self.e_score_correction_bias,
-            self.n_group, 2, self.topk_group, self.top_k,
-            self.top_k > 1 and self.norm_topk_prob, 1e-20, self.routed_scaling_factor
+            self.n_group, self.topk_group, self.top_k,
+            self.norm_topk_prob, self.routed_scaling_factor
         )
     else:
         topk_idx, topk_weight = self(x)
@@ -291,11 +291,8 @@ def fuse_gate_forward(self, x: torch.Tensor):
 
 
 def moe_infer_decode(self, x: torch.Tensor, topk_ids: torch.Tensor, topk_weight: torch.Tensor):
-    if (
-        x.device.type == "xpu"
-        and x.dtype in [torch.float, torch.half]
-        and self.experts[0].down_proj.qtype == 2
-    ):
+    qtype = self.experts[0].down_proj.qtype
+    if use_fuse_moe(x, qtype):
         if getattr(self, "gates", None) is None:
             gate_addrs = [expert.gate_proj.weight.data_ptr() for expert in self.experts]
             up_addrs = [expert.up_proj.weight.data_ptr() for expert in self.experts]
@@ -310,7 +307,7 @@ def moe_infer_decode(self, x: torch.Tensor, topk_ids: torch.Tensor, topk_weight:
         import xe_linear
         final_out = xe_linear.moe_forward_vec(
             x, topk_ids, topk_weight, self.gates, self.ups, self.downs,
-            x.size(-1), self.experts[0].intermediate_size, 2
+            x.size(-1), self.experts[0].intermediate_size, qtype
         )
     else:
         idxs = topk_ids.flatten().tolist()

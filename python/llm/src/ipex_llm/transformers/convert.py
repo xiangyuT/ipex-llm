@@ -193,7 +193,8 @@ def is_linear_module(module):
                and hasattr(module.quant_method, "quant_config")
                and module.quant_method.quant_config.get_name() == "gptq"):
                 _USE_VLLM_GPTQ = True
-            invalidInputError(module.skip_bias_add is not True, "Currently, ipex-vllm does not"
+            invalidInputError(module.skip_bias_add is not True or module.bias is None,
+                              "Currently, ipex-vllm does not"
                               " support linear layers with skip_bias_add argument")
             if isinstance(module, RowParallelLinear) and tp_size >= 2:
                 mp_group = get_tensor_model_parallel_group()
@@ -1074,6 +1075,9 @@ def _optimize_pre(model, qtype=None):
     elif model.config.model_type == "deepseek_v3" and model.config.hidden_size == 2048:
         from ipex_llm.transformers.models.deepseek import padding_mla_v_hd
         model.apply(padding_mla_v_hd)
+    elif model.config.model_type == "qwen2_5_omni":
+        from ipex_llm.transformers.models.qwen2_5_omni import merge_qkv
+        model.apply(merge_qkv)
     return model
 
 
@@ -1086,6 +1090,15 @@ def ggml_convert_low_bit(model, qtype, optimize_model=True,
                          embedding_qtype=None,
                          mixed_precision=False,
                          disable_optimize_pre=False):
+    if qtype == ggml_tensor_qtype["sym_int4"] and torch.__version__ >= "2.6":
+        logger.warning("sym_int4 is deprecated, use woq_int4 instead, "
+                       "if you are loading saved sym_int4 low bit model, "
+                       "please resaved it with woq_int4")
+        qtype = ggml_tensor_qtype["woq_int4"]
+    elif qtype == ggml_tensor_qtype["woq_int4"] and torch.__version__ < "2.6":
+        logger.warning("woq_int4 is not supported with pytorch<2.6, "
+                       "use sym_int4 instead or use ipex-llm with pytorch>=2.6")
+        qtype = ggml_tensor_qtype["sym_int4"]
     if qtype in ggml_tensor_qtype.values():
         index = list(ggml_tensor_qtype.values()).index(qtype)
         logger.info(f"Converting the current model to "
@@ -1276,6 +1289,8 @@ def _optimize_post(model):
                 convert_forward(model,
                                 module.BertSelfAttention,
                                 self_attention_forward)
+                if hasattr(module, "BertSdpaSelfAttention"):
+                    convert_forward(model, module.BertSdpaSelfAttention, self_attention_forward)
                 convert_forward(model,
                                 module.BertEncoder,
                                 encoder_forward)
@@ -1864,6 +1879,8 @@ def _optimize_post(model):
         convert_forward(model,
                         module.BertSelfAttention,
                         self_attention_forward)
+        if hasattr(module, "BertSdpaSelfAttention"):
+            convert_forward(model, module.BertSdpaSelfAttention, self_attention_forward)
         convert_forward(model,
                         module.BertEncoder,
                         encoder_forward)
@@ -2039,6 +2056,56 @@ def _optimize_post(model):
         convert_forward(model, module.DeepseekV3Model, deepseek_model_forward)
         convert_forward(model, module.DeepseekV3Attention, deepseek_attention_forward)
         convert_forward(model, module.DeepseekV3MoE, deepseek_moe_forward)
+    elif model.config.model_type == "qwen2_5_omni":
+        modeling_module_name = model.__class__.__module__
+        module = importlib.import_module(modeling_module_name)
+
+        # llm opt
+        from ipex_llm.transformers.models.qwen2_5_omni import qwen2_5_omni_attention_forward
+        from ipex_llm.transformers.models.qwen2_5_omni import qwen2_5_omni_thinker_model_forward
+        from ipex_llm.transformers.models.qwen2 import qwen2_mlp_forward
+        from ipex_llm.transformers.models.common import rms_norm_forward
+        convert_forward(model.thinker.model, module.Qwen2_5OmniAttention,
+                        qwen2_5_omni_attention_forward)
+        convert_forward(model.thinker.model, module.Qwen2_5OmniSdpaAttention,
+                        qwen2_5_omni_attention_forward)
+        convert_forward(model.thinker.model, module.Qwen2_5OmniThinkerModel,
+                        qwen2_5_omni_thinker_model_forward)
+        convert_forward(model.thinker.model, module.Qwen2MLP, qwen2_mlp_forward)
+        convert_forward(model, module.Qwen2RMSNorm, rms_norm_forward)
+
+        # vision opt
+        from ipex_llm.transformers.models.qwen2_vl import qwen2_vision_get_dtype
+        from ipex_llm.transformers.models.qwen2_5_omni import qwen2_5_omni_vision_attention_forward
+        convert_forward(model.thinker.visual, module.Qwen2_5OmniVisionAttention,
+                        qwen2_5_omni_vision_attention_forward)
+        convert_forward(model.thinker.visual, module.Qwen2_5OmniVisionSdpaAttention,
+                        qwen2_5_omni_vision_attention_forward)
+
+        # audio opt
+        from ipex_llm.transformers.models.qwen2_5_omni import qwen2_5_omni_audio_attention_forward
+        convert_forward(model.thinker.audio_tower, module.Qwen2_5OmniAudioAttention,
+                        qwen2_5_omni_audio_attention_forward)
+        convert_forward(model.thinker.audio_tower, module.Qwen2_5OmniAudioSdpaAttention,
+                        qwen2_5_omni_audio_attention_forward)
+
+        # tts opt
+        if model.has_talker:
+            # talker part
+            convert_forward(model.talker.model, module.Qwen2_5OmniAttention,
+                            qwen2_5_omni_attention_forward)
+            convert_forward(model.talker.model, module.Qwen2_5OmniSdpaAttention,
+                            qwen2_5_omni_attention_forward)
+            convert_forward(model.talker.model, module.Qwen2_5OmniTalkerModel,
+                            qwen2_5_omni_thinker_model_forward)
+            convert_forward(model.talker.model, module.Qwen2MLP, qwen2_mlp_forward)
+
+            # token2wav part
+            from ipex_llm.transformers.models.qwen2_5_omni import dit_attention_forward
+            from ipex_llm.transformers.models.qwen2_5_omni import _create_block_diff
+            convert_forward(model.token2wav, module.DiTAttention, dit_attention_forward)
+            dit_model = model.token2wav.code2wav_dit_model
+            dit_model._create_block_diff = MethodType(_create_block_diff, dit_model)
 
     return model
 

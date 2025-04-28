@@ -17,6 +17,7 @@
 import math
 import torch
 from typing import List
+from ipex_llm.utils.common import invalidInputError
 
 
 def merge_linear(linears: List[torch.nn.Linear]) -> torch.nn.Linear:
@@ -273,11 +274,11 @@ def scaled_dot_product_attention(query: torch.Tensor, key: torch.Tensor,
             else:
                 attn_output = xe_addons.sdp_causal(query, key, value, mask, scale)
         elif seq_length != kv_length and seq_length <= 32:
-            # todo: add scale support
+            # todo: add further scale support
             if key.dtype == torch.uint8:
-                attn_output = xe_addons.sdp_fp8(query, key, value, mask)
+                attn_output = xe_addons.sdp_fp8(query, key, value, mask, scale)
             else:
-                attn_output = xe_addons.sdp(query, key, value, mask)
+                attn_output = xe_addons.sdp(query, key, value, mask, scale)
         else:
             if key.dtype == torch.uint8:
                 attn_output = xe_addons.sdp_fp8_non_causal(query, key, value, mask, scale)
@@ -303,3 +304,56 @@ def scaled_dot_product_attention(query: torch.Tensor, key: torch.Tensor,
             )
         attn_output = attn_output.to(dtype)    # workaround ipex 2.1's bug
         return attn_output
+
+
+def linear_forward(x: torch.Tensor, weight: torch.Tensor, qtype: int, out_features: int):
+    if weight.device.type == "xpu":
+        new_shape = x.shape[:-1] + (out_features,)
+        x = x.to(weight.device, dtype=torch.float16)
+        x_2d = x.contiguous().view(-1, x.shape[-1])
+        import xe_linear
+        x = xe_linear.forward_new(x_2d, weight, qtype, out_features)
+        x = x.view(new_shape)
+        return x
+    else:
+        invalidInputError(False,
+                          "Unsupported device type: only support weight on xpu device.")
+
+
+def quantize_linear(weight: torch.Tensor, in_features: int, precision: str):
+    from ipex_llm.transformers.low_bit_linear import FP4Params
+    from ipex_llm.ggml.quantize import ggml_tensor_qtype
+
+    invalidInputError(precision in ggml_tensor_qtype.keys(),
+                      f"{precision} is not supported, "
+                      f"only {ggml_tensor_qtype.keys()} are supported now.")
+    qtype = ggml_tensor_qtype[precision]
+    paramsLowBit = FP4Params(data=weight.data,
+                             requires_grad=False,
+                             quantized=False,
+                             _shape=None,
+                             convert_shape_only=False,
+                             qtype=qtype,
+                             in_features=in_features,
+                             enable_scale_search=False).to("cpu")
+    return paramsLowBit, qtype
+
+
+def moe_group_topk(scores: torch.Tensor, e_score_correction_bias: torch.Tensor,
+                   n_group: int, topk_group: int, top_k: int, norm_topk_prob: float,
+                   routed_scaling_factor: float):
+    import xe_addons
+    topk_idx, topk_weight = xe_addons.moe_group_topk(
+        scores, e_score_correction_bias,
+        n_group, 2, topk_group, top_k,
+        top_k > 1 and norm_topk_prob, 1e-20, routed_scaling_factor
+    )
+    return topk_idx, topk_weight
+
+
+def rotary_two_with_cache_inplaced(query_states: torch.Tensor, key_states: torch.Tensor,
+                                   cos: torch.Tensor, sin: torch.Tensor,
+                                   half_layout: bool):
+    import xe_addons
+    xe_addons.rotary_two_with_cache_inplaced(query_states, key_states,
+                                             cos, sin, half_layout)

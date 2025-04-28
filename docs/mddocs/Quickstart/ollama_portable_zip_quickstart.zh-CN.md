@@ -3,7 +3,7 @@
    < <a href='./ollama_portable_zip_quickstart.md'>English</a> | <b>中文</b> >
 </p>
 
-本指南演示如何使用 [Ollama portable zip](https://github.com/intel/ipex-llm/releases/tag/v2.2.0-nightly) 通过 `ipex-llm` 在 Intel GPU 上直接免安装运行 Ollama。
+本指南演示如何使用 [Ollama portable zip](https://github.com/ipex-llm/ipex-llm/releases/tag/v2.3.0-nightly) 通过 `ipex-llm` 在 Intel GPU 上直接免安装运行 Ollama。
 
 > [!NOTE]
 > Ollama portable zip 在如下设备上进行了验证:
@@ -29,6 +29,7 @@
   - [在多块 GPU 可用时选择特定的 GPU 来运行 Ollama](#在多块-gpu-可用时选择特定的-gpu-来运行-ollama)
   - [性能调优](#性能调优)
   - [Ollama v0.5.4 之后新增模型支持](#ollama-v054-之后新增模型支持)
+  - [签名验证](#签名验证)
 - [更多信息](ollama_quickstart.zh-CN.md)
 
 ## Windows用户指南
@@ -42,7 +43,7 @@
 
 ### 步骤 1：下载和解压
 
-从此[链接](https://github.com/intel/ipex-llm/releases/tag/v2.2.0-nightly)下载 IPEX-LLM Ollama portable zip。
+从此[链接](https://github.com/ipex-llm/ipex-llm/releases/tag/v2.3.0-nightly)下载 IPEX-LLM Ollama portable zip。
 
 然后，将 zip 文件解压到一个文件夹中。
 
@@ -75,7 +76,7 @@
 
 ### 步骤 1：下载和解压
 
-从此[链接](https://github.com/intel/ipex-llm/releases/tag/v2.2.0-nightly)下载 IPEX-LLM Ollama portable tgz。
+从此[链接](https://github.com/ipex-llm/ipex-llm/releases/tag/v2.3.0-nightly)下载 IPEX-LLM Ollama portable tgz。
 
 然后，开启一个终端，输入如下命令将 tgz 文件解压到一个文件夹中。
 ```bash
@@ -218,4 +219,15 @@ Ollama 默认从 Ollama 库下载模型。通过在**运行 Ollama 之前**设�
 | Smallthinker | `ollama run smallthinker` |`./ollama run smallthinker` | [smallthinker](https://ollama.com/library/smallthinker) |
 | Granite3.1-Dense |  `ollama run granite3-dense` | `./ollama run granite3-dense` | [granite3.1-dense](https://ollama.com/library/granite3.1-dense) |
 | Granite3.1-Moe-3B | `ollama run granite3-moe` | `./ollama run granite3-moe` | [granite3.1-moe](https://ollama.com/library/granite3.1-moe) |
-| Gemma 3 | `set IPEX_LLM_MODEL_SOURCE=modelscope` <br> `ollama run gemma3` <br> `ollama run gemma3:1b` <br> `ollama run gemma3:12b` <br> `ollama run gemma3:27b` | `export IPEX_LLM_MODEL_SOURCE=modelscope` <br> `./ollama run gemma3` <br> `./ollama run gemma3:1b` <br> `./ollama run gemma3:12b` <br> `./ollama run gemma3:27b` | [gemma3](https://www.modelscope.cn/models/lmstudio-community/gemma-3-4b-it-GGUF) <br> [gemma3:1b](https://www.modelscope.cn/models/lmstudio-community/gemma-3-1b-it-GGUF) <br> [gemma3:12b](https://www.modelscope.cn/models/lmstudio-community/gemma-3-12b-it-GGUF) <br> [gemma3:27b](https://www.modelscope.cn/models/lmstudio-community/gemma-3-4b-it-GGUF) |
+| Gemma 3 1B | `set IPEX_LLM_MODEL_SOURCE=modelscope` <br> `ollama run gemma3:1b` | `export IPEX_LLM_MODEL_SOURCE=modelscope` <br> `./ollama run gemma3:1b`|  [gemma3:1b](https://www.modelscope.cn/models/lmstudio-community/gemma-3-1b-it-GGUF) |
+
+### 签名验证
+
+针对 2.2.0 版本的 portable zip/tgz, 可以使用如下命令验证其签名：
+
+```
+openssl cms -verify -in <portable-zip-or-tgz-file-name>.pkcs1.sig -inform DER -content <portable-zip-or-tgz-file-name> -out nul -noverify
+```
+
+> [!NOTE]
+> 在验证签名之前，请确保已在系统上安装 `openssl`。

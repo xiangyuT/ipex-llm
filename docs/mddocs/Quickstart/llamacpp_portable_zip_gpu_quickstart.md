@@ -6,7 +6,7 @@
 >[!Important]
 > You can now run **DeepSeek-R1-671B-Q4_K_M** with 1 or 2 Arc A770 on Xeon using the latest *llama.cpp Portable Zip*; see the [guide](#flashmoe-for-deepseek-v3r1) below.
 
-This guide demonstrates how to use [llama.cpp portable zip](https://github.com/intel/ipex-llm/releases/tag/v2.2.0-nightly) to directly run llama.cpp on Intel GPU with `ipex-llm` (without the need of manual installations).
+This guide demonstrates how to use [llama.cpp portable zip](https://github.com/ipex-llm/ipex-llm/releases/tag/v2.3.0-nightly) to directly run llama.cpp on Intel GPU with `ipex-llm` (without the need of manual installations).
 
 > [!NOTE]
 > llama.cpp portable zip has been verified on:
@@ -31,6 +31,7 @@ This guide demonstrates how to use [llama.cpp portable zip](https://github.com/i
   - [Error: Detected different sycl devices](#error-detected-different-sycl-devices)
   - [Multi-GPUs usage](#multi-gpus-usage)
   - [Performance Environment](#performance-environment)
+  - [Signature Verification](#signature-verification)
 - [More Details](llama_cpp_quickstart.md)
 
 ## Windows Quickstart
@@ -41,7 +42,7 @@ We recommend updating your GPU driver to the [latest](https://www.intel.com/cont
 
 ### Step 1: Download and Unzip
 
-Download IPEX-LLM llama.cpp portable zip for Windows users from the [link](https://github.com/intel/ipex-llm/releases/tag/v2.2.0-nightly).
+Download IPEX-LLM llama.cpp portable zip for Windows users from the [link](https://github.com/ipex-llm/ipex-llm/releases/tag/v2.3.0-nightly).
 
 Then, extract the zip file to a folder.
 
@@ -64,7 +65,7 @@ Before running, you should download or copy community GGUF model to your local d
 #### Run GGUF model
 Please change `PATH\TO\DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf` to your model path before your run below command.
 ```cmd
-llama-cli.exe -m PATH\TO\DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf -p "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think> <answer> answer here </answer>. User: Question:The product of the ages of three teenagers is 4590. How old is the oldest? a. 18 b. 19 c. 15 d. 17 Assistant: <think>" -n 2048  -t 8 -e -ngl 99 --color -c 2500 --temp 0
+llama-cli.exe -m PATH\TO\DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf -p "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think> <answer> answer here </answer>. User: Question:The product of the ages of three teenagers is 4590. How old is the oldest? a. 18 b. 19 c. 15 d. 17 Assistant: <think>" -n 2048  -t 8 -e -ngl 99 --color -c 2500 --temp 0 -no-cnv
 ```
 
 Part of outputs:
@@ -75,27 +76,32 @@ Found 1 SYCL devices:
 |  |                   |                                       |       |compute|Max work|sub  |mem    |                     |
 |ID|        Device Type|                                   Name|Version|units  |group   |group|size   |       Driver version|
 |--|-------------------|---------------------------------------|-------|-------|--------|-----|-------|---------------------|
-| 0| [level_zero:gpu:0]|                     Intel Arc Graphics|  12.71|    128|    1024|   32| 13578M|            1.3.27504|
+| 0| [level_zero:gpu:0]|                Intel Arc A770 Graphics|  12.55|    512|    1024|   32| 16225M|     1.6.31294.120000|
+SYCL Optimization Feature:
+|ID|        Device Type|Reorder|
+|--|-------------------|-------|
+| 0| [level_zero:gpu:0]|      Y|
+llama_kv_cache_init: kv_size = 2528, offload = 1, type_k = 'f16', type_v = 'f16', n_layer = 28, can_shift = 1
 llama_kv_cache_init:      SYCL0 KV buffer size =   138.25 MiB
-llama_new_context_with_model: KV self size  =  138.25 MiB, K (f16):   69.12 MiB, V (f16):   69.12 MiB
-llama_new_context_with_model:  SYCL_Host  output buffer size =     0.58 MiB
-llama_new_context_with_model:      SYCL0 compute buffer size =  1501.00 MiB
-llama_new_context_with_model:  SYCL_Host compute buffer size =    58.97 MiB
-llama_new_context_with_model: graph nodes  = 874
-llama_new_context_with_model: graph splits = 2
+llama_init_from_model: KV self size  =  138.25 MiB, K (f16):   69.12 MiB, V (f16):   69.12 MiB
+llama_init_from_model:  SYCL_Host  output buffer size =     0.58 MiB
+llama_init_from_model:      SYCL0 compute buffer size =  1501.00 MiB
+llama_init_from_model:  SYCL_Host compute buffer size =    59.28 MiB
+llama_init_from_model: graph nodes  = 874
+llama_init_from_model: graph splits = 2
+common_init_from_params: setting dry_penalty_last_n to ctx_size = 2528
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 main: llama threadpool init, n_threads = 8
 
-system_info: n_threads = 8 (n_threads_batch = 8) / 22 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | LLAMAFILE = 1 | OPENMP = 1 | AARCH64_REPACK = 1 |
+system_info: n_threads = 8 (n_threads_batch = 8) / 32 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | LLAMAFILE = 1 | OPENMP = 1 | AARCH64_REPACK = 1 | 
 
-sampler seed: 341519086
-sampler params:
+sampler seed: 1856767110
+sampler params: 
         repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
-        dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
-        top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, temp = 0.000
+        dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 2528
+        top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.000
         mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000
-sampler chain: logits -> logit-bias -> penalties -> dry -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist
-
+sampler chain: logits -> logit-bias -> penalties -> dry -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
 generate: n_ctx = 2528, n_batch = 4096, n_predict = 2048, n_keep = 1
 
 <think>
@@ -120,7 +126,7 @@ Check your GPU driver version, and update it if needed; we recommend following [
 
 ### Step 1: Download and Extract
 
-Download IPEX-LLM llama.cpp portable tgz for Linux users from the [link](https://github.com/intel/ipex-llm/releases/tag/v2.2.0-nightly).
+Download IPEX-LLM llama.cpp portable tgz for Linux users from the [link](https://github.com/ipex-llm/ipex-llm/releases/tag/v2.3.0-nightly).
 
 Then, extract the tgz file to a folder.
 
@@ -143,7 +149,7 @@ Before running, you should download or copy community GGUF model to your local d
 #### Run GGUF model
 Please change `/PATH/TO/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf` to your model path before your run below command.  
 ```bash
-./llama-cli -m /PATH/TO/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf -p "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think> <answer> answer here </answer>. User: Question:The product of the ages of three teenagers is 4590. How old is the oldest? a. 18 b. 19 c. 15 d. 17 Assistant: <think>" -n 2048  -t 8 -e -ngl 99 --color -c 2500 --temp 0
+./llama-cli -m /PATH/TO/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf -p "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think> <answer> answer here </answer>. User: Question:The product of the ages of three teenagers is 4590. How old is the oldest? a. 18 b. 19 c. 15 d. 17 Assistant: <think>" -n 2048  -t 8 -e -ngl 99 --color -c 2500 --temp 0 -no-cnv
 ```
 
 Part of outputs:
@@ -154,27 +160,32 @@ Found 1 SYCL devices:
 |  |                   |                                       |       |compute|Max work|sub  |mem    |                     |
 |ID|        Device Type|                                   Name|Version|units  |group   |group|size   |       Driver version|
 |--|-------------------|---------------------------------------|-------|-------|--------|-----|-------|---------------------|
-| 0| [level_zero:gpu:0]|                     Intel Arc Graphics|  12.71|    128|    1024|   32| 13578M|            1.3.27504|
+| 0| [level_zero:gpu:0]|                Intel Arc A770 Graphics|  12.55|    512|    1024|   32| 16225M|     1.6.31294.120000|
+SYCL Optimization Feature:
+|ID|        Device Type|Reorder|
+|--|-------------------|-------|
+| 0| [level_zero:gpu:0]|      Y|
+llama_kv_cache_init: kv_size = 2528, offload = 1, type_k = 'f16', type_v = 'f16', n_layer = 28, can_shift = 1
 llama_kv_cache_init:      SYCL0 KV buffer size =   138.25 MiB
-llama_new_context_with_model: KV self size  =  138.25 MiB, K (f16):   69.12 MiB, V (f16):   69.12 MiB
-llama_new_context_with_model:  SYCL_Host  output buffer size =     0.58 MiB
-llama_new_context_with_model:      SYCL0 compute buffer size =  1501.00 MiB
-llama_new_context_with_model:  SYCL_Host compute buffer size =    58.97 MiB
-llama_new_context_with_model: graph nodes  = 874
-llama_new_context_with_model: graph splits = 2
+llama_init_from_model: KV self size  =  138.25 MiB, K (f16):   69.12 MiB, V (f16):   69.12 MiB
+llama_init_from_model:  SYCL_Host  output buffer size =     0.58 MiB
+llama_init_from_model:      SYCL0 compute buffer size =  1501.00 MiB
+llama_init_from_model:  SYCL_Host compute buffer size =    59.28 MiB
+llama_init_from_model: graph nodes  = 874
+llama_init_from_model: graph splits = 2
+common_init_from_params: setting dry_penalty_last_n to ctx_size = 2528
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 main: llama threadpool init, n_threads = 8
 
-system_info: n_threads = 8 (n_threads_batch = 8) / 22 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | LLAMAFILE = 1 | OPENMP = 1 | AARCH64_REPACK = 1 |
+system_info: n_threads = 8 (n_threads_batch = 8) / 32 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | LLAMAFILE = 1 | OPENMP = 1 | AARCH64_REPACK = 1 | 
 
-sampler seed: 341519086
-sampler params:
+sampler seed: 1856767110
+sampler params: 
         repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
-        dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = -1
-        top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, temp = 0.000
+        dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 2528
+        top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.000
         mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000
-sampler chain: logits -> logit-bias -> penalties -> dry -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist
-
+sampler chain: logits -> logit-bias -> penalties -> dry -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
 generate: n_ctx = 2528, n_batch = 4096, n_predict = 2048, n_keep = 1
 
 <think>
@@ -193,6 +204,8 @@ Tested MoE GGUF Models (other MoE GGUF models are also supported):
 - [DeepSeek-V3-Q6_K](https://huggingface.co/unsloth/DeepSeek-V3-GGUF/tree/main/DeepSeek-V3-Q6_K)
 - [DeepSeek-R1-Q4_K_M.gguf](https://huggingface.co/unsloth/DeepSeek-R1-GGUF/tree/main/DeepSeek-R1-Q4_K_M)
 - [DeepSeek-R1-Q6_K](https://huggingface.co/unsloth/DeepSeek-R1-GGUF/tree/main/DeepSeek-R1-Q6_K)
+- [DeepSeek-V3-0324-GGUF/Q4_K_M](https://huggingface.co/unsloth/DeepSeek-V3-0324-GGUF/tree/main/Q4_K_M)
+- [DeepSeek-V3-0324-GGUF/Q6_K](https://huggingface.co/unsloth/DeepSeek-V3-0324-GGUF/tree/main/Q6_K)
 
 #### Run DeepSeek V3/R1 with FlashMoE
 
@@ -210,8 +223,9 @@ Before running, you should download or copy community GGUF model to your local d
 
 Change `/PATH/TO/DeepSeek-R1-Q4_K_M-00001-of-00009.gguf` to your model path, then run `DeepSeek-R1-Q4_K_M.gguf`
 
+##### cli
 ```bash
-./flash-moe -m /PATH/TO/DeepSeek-R1-Q4_K_M-00001-of-00009.gguf --prompt "What's AI?"
+./flash-moe -m /PATH/TO/DeepSeek-R1-Q4_K_M-00001-of-00009.gguf --prompt "What's AI?" -no-cnv
 ```
 
 Part of outputs
@@ -260,6 +274,32 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 <answer>XXXX</answer> [end of text]
 ```
 
+##### Serving
+```bash
+./flash-moe -m /PATH/TO/DeepSeek-R1-Q4_K_M-00001-of-00009.gguf --serve -n 512 -np 2 -c 4096
+```
+> `-n` means number of tokens to predict, `-np` means number of parallel sequences to decode, `-c` means the size of whole context, you can adjust these values based on your requirements.
+>
+> Serving function is available from [v2.3.0 nightly build](https://github.com/ipex-llm/ipex-llm/releases/tag/v2.3.0-nightly).
+
+Part of outputs
+
+```bash
+...
+llama_init_from_model: graph nodes  = 3560
+llama_init_from_model: graph splits = 121
+common_init_from_params: setting dry_penalty_last_n to ctx_size = 4096
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+srv          init: initializing slots, n_slots = 2
+slot         init: id  0 | task -1 | new slot n_ctx_slot = 2048
+slot         init: id  1 | task -1 | new slot n_ctx_slot = 2048
+main: model loaded
+main: chat template, chat_template: {% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='', is_first_sp=true) %}{%- for message in messages %}{%- if message['role'] == 'system' %}{%- if ns.is_first_sp %}{% set ns.system_prompt = ns.system_prompt + message['content'] %}{% set ns.is_first_sp = false %}{%- else %}{% set ns.system_prompt = ns.system_prompt + '\n\n' + message['content'] %}{%- endif %}{%- endif %}{%- endfor %}{{ bos_token }}{{ ns.system_prompt }}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and 'tool_calls' in message %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls'] %}{%- if not ns.is_first %}{%- if message['content'] is none %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + '<｜tool▁call▁end｜>'}}{%- else %}{{'<｜Assistant｜>' + message['content'] + '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + '<｜tool▁call▁end｜>'}}{%- endif %}{%- set ns.is_first = true -%}{%- else %}{{'\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + '<｜tool▁call▁end｜>'}}{%- endif %}{%- endfor %}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- if message['role'] == 'assistant' and 'tool_calls' not in message %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜>'}}{% endif %}, example_format: 'You are a helpful assistant
+
+<｜User｜>Hello<｜Assistant｜>Hi there<｜end▁of▁sentence｜><｜User｜>How are you?<｜Assistant｜>'
+main: server is listening on http://127.0.0.1:8080 - starting the main loop
+srv  update_slots: all slots are idle
+```
 
 ## Tips & Troubleshooting
 
@@ -321,3 +361,14 @@ To enable SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS, you can run below comma
 - `export SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1`(Linux user)
 > [!NOTE]
 > The environment variable SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS determines the usage of immediate command lists for task submission to the GPU. While this mode typically enhances performance, exceptions may occur. Please consider experimenting with and without this environment variable for best performance. For more details, you can refer to [this article](https://www.intel.com/content/www/us/en/developer/articles/guide/level-zero-immediate-command-lists.html).  
+
+### Signature Verification
+
+For portable zip/tgz version 2.2.0, you could verify its signature with the following command:
+
+```
+openssl cms -verify -in <portable-zip-or-tgz-file-name>.pkcs1.sig -inform DER -content <portable-zip-or-tgz-file-name> -out nul -noverify
+```
+
+> [!NOTE]
+> Please ensure that `openssl` is installed on your system before verifying signature.
