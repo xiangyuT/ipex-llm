@@ -154,11 +154,13 @@ RUN set -eux && \
     rm -rf /tmp/neo && \
     #
     # Install vllm
-    git clone -b 0.6.6 https://github.com/analytics-zoo/vllm.git /llm/vllm && \
+    git clone -b 0.8.3 https://github.com/analytics-zoo/vllm.git /llm/vllm && \
     cd /llm/vllm && \
     pip install setuptools-scm && \
     pip install --upgrade cmake && \
     VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -v /llm/vllm && \
+    pip install intel-extension-for-pytorch==2.6.10+xpu --extra-index-url=https://pytorch-extension.intel.com/release-whl/stable/xpu/cn/ && \
+    pip uninstall -y oneccl oneccl-devel && \
     pip install mpi4py fastapi uvicorn openai && \
     pip install ray numba
 
