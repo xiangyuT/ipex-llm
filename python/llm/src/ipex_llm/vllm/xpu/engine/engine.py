@@ -39,6 +39,7 @@ logger = init_logger(__name__)
 
 class IPEXLLMAsyncLLMEngine(AsyncLLMEngine):
     _is_converted = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -67,7 +68,7 @@ class IPEXLLMAsyncLLMEngine(AsyncLLMEngine):
         vllm_config: VllmConfig,
         start_engine_loop: bool = True,
         usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
-        stat_loggers: Optional[dict[str, StatLoggerBase]] = None,
+        stat_loggers: Optional[dict[str, StatLoggerBase]]=None,
         disable_log_requests: bool = False,
         disable_log_stats: bool = False,
         load_in_low_bit: str = "sym_int4",
@@ -87,6 +88,7 @@ class IPEXLLMAsyncLLMEngine(AsyncLLMEngine):
 
 class IPEXLLMAsyncV1Engine(AsyncLLM):
     _is_converted = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -113,7 +115,7 @@ class IPEXLLMAsyncV1Engine(AsyncLLM):
         vllm_config: VllmConfig,
         start_engine_loop: bool = True,
         usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
-        stat_loggers: Optional[dict[str, StatLoggerBase]] = None,
+        stat_loggers: Optional[dict[str, StatLoggerBase]]=None,
         disable_log_requests: bool = False,
         disable_log_stats: bool = False,
         load_in_low_bit: str = "sym_int4",
@@ -130,7 +132,9 @@ class IPEXLLMAsyncV1Engine(AsyncLLM):
             disable_log_stats=disable_log_stats,
         )
 
+
 class IPEXLLMClass(LLM):
+
     def __init__(
         self,
         model: str,
@@ -152,8 +156,8 @@ class IPEXLLMClass(LLM):
         max_seq_len_to_capture: int = 8192,
         disable_custom_all_reduce: bool = False,
         disable_async_output_proc: bool = False,
-        hf_overrides: Optional[HfOverrides] = None,
-        mm_processor_kwargs: Optional[dict[str, Any]] = None,
+        hf_overrides: Optional[HfOverrides]=None,
+        mm_processor_kwargs: Optional[dict[str, Any]]=None,
         # After positional args are removed, move this right below `model`
         task: TaskOption = "auto",
         override_pooler_config: Optional[PoolerConfig] = None,
@@ -233,6 +237,7 @@ class IPEXLLMClass(LLM):
 
 class IPEXLLMLLMV1Engine(V1LLMEngine):
     _is_converted = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -261,7 +266,7 @@ class IPEXLLMLLMV1Engine(V1LLMEngine):
         cls,
         vllm_config: VllmConfig,
         usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
-        stat_loggers: Optional[Dict[str, StatLoggerBase]] = None,
+        stat_loggers: Optional[Dict[str, StatLoggerBase]]=None,
         disable_log_stats: bool = False,
         load_in_low_bit: str = "sym_int4",
     ) -> "LLMEngine":
@@ -275,8 +280,10 @@ class IPEXLLMLLMV1Engine(V1LLMEngine):
             disable_log_stats=disable_log_stats
         )
 
+
 class IPEXLLMLLMEngine(LLMEngine):
     _is_converted = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -300,7 +307,7 @@ class IPEXLLMLLMEngine(LLMEngine):
         cls,
         vllm_config: VllmConfig,
         usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
-        stat_loggers: Optional[Dict[str, StatLoggerBase]] = None,
+        stat_loggers: Optional[Dict[str, StatLoggerBase]]=None,
         disable_log_stats: bool = False,
         load_in_low_bit: str = "sym_int4",
     ) -> "LLMEngine":
@@ -314,8 +321,10 @@ class IPEXLLMLLMEngine(LLMEngine):
             disable_log_stats=disable_log_stats
         )
 
+
 class IPEXLLMMQLLMEngine(MQLLMEngine):
     _is_converted = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -346,8 +355,11 @@ class IPEXLLMMQLLMEngine(MQLLMEngine):
 
 from vllm.transformers_utils.config import (
     maybe_register_config_serialize_by_value)
+
+
 def signal_handler(*_) -> None:
-    raise KeyboardInterrupt("MQLLMEngine terminated")
+    raise KeyboardInterrupt("MQLLMEngine terminated")  # noqa
+
 
 def run_mp_engine(vllm_config: VllmConfig, usage_context: UsageContext,
                   ipc_path: str, disable_log_stats: bool,
@@ -371,7 +383,7 @@ def run_mp_engine(vllm_config: VllmConfig, usage_context: UsageContext,
     except BaseException as e:
         logger.exception(e)
         engine_alive.value = False
-        raise e
+        raise e  # noqa
 
 if os.getenv("VLLM_USE_V1"):
     IPEXLLMAsyncLLMEngine = IPEXLLMAsyncV1Engine
