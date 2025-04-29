@@ -102,7 +102,7 @@ def get_load_function(low_bit):
                         "chatglm" in self.vllm_config.model_config.model.lower()) and \
                         "gptq" not in self.model_config.model.lower() and \
                         "awq" not in self.model_config.model.lower() and \
-                        "qwen3moe" not in self.model_config.model.lower():
+                        "qwen3" not in self.model_config.model.lower():
                     self.model.apply(padding_mlp)
                 from ipex_llm import optimize_model
                 not_convert_last_mlp = os.getenv("IPEX_LLM_NOT_CONVERT_LAST_MLP", None)
