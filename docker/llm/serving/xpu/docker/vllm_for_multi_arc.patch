@@ -13247,7 +13247,7 @@ index a7800d415..26af87512 100644
          # Split concatenated embeddings for each image item.
 diff --git a/vllm/model_executor/models/qwen3.py b/vllm/model_executor/models/qwen3.py
 new file mode 100644
-index 000000000..9c14038e6
+index 000000000..338fffed9
 --- /dev/null
 +++ b/vllm/model_executor/models/qwen3.py
 @@ -0,0 +1,329 @@
@@ -13387,11 +13387,11 @@ index 000000000..9c14038e6
 +        # Add qk-norm
 +        q_by_head = q.view(*q.shape[:-1], q.shape[-1] // self.head_dim,
 +                           self.head_dim)
-+        q_by_head = self.q_norm.forward_native(q_by_head)
++        q_by_head = self.q_norm.forward_xpu(q_by_head.contiguous())
 +        q = q_by_head.view(q.shape)
 +        k_by_head = k.view(*k.shape[:-1], k.shape[-1] // self.head_dim,
 +                           self.head_dim)
-+        k_by_head = self.k_norm.forward_native(k_by_head)
++        k_by_head = self.k_norm.forward_xpu(k_by_head.contiguous())
 +        k = k_by_head.view(k.shape)
 +        q, k = self.rotary_emb(positions, q, k)
 +        attn_output = self.attn(q, k, v)
@@ -13582,7 +13582,7 @@ index 000000000..9c14038e6
 +        return loader.load_weights(weights)
 diff --git a/vllm/model_executor/models/qwen3_moe.py b/vllm/model_executor/models/qwen3_moe.py
 new file mode 100644
-index 000000000..390bb7adf
+index 000000000..bda3de2d3
 --- /dev/null
 +++ b/vllm/model_executor/models/qwen3_moe.py
 @@ -0,0 +1,531 @@
@@ -13813,12 +13813,12 @@ index 000000000..390bb7adf
 +        # Add qk-norm
 +        q_by_head = q.view(*q.shape[:-1], q.shape[-1] // self.head_dim,
 +                           self.head_dim)
-+        q_by_head = self.q_norm.forward_native(q_by_head)
++        q_by_head = self.q_norm.forward_xpu(q_by_head.contiguous())
 +        q = q_by_head.view(q.shape)
 +
 +        k_by_head = k.view(*k.shape[:-1], k.shape[-1] // self.head_dim,
 +                           self.head_dim)
-+        k_by_head = self.k_norm.forward_native(k_by_head)
++        k_by_head = self.k_norm.forward_xpu(k_by_head.contiguous())
 +        k = k_by_head.view(k.shape)
 +        q, k = self.rotary_emb(positions, q, k)
 +        attn_output = self.attn(q, k, v)
