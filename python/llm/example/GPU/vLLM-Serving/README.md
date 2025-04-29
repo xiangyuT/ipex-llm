@@ -50,9 +50,14 @@ pip install --pre --upgrade "ipex-llm[xpu_2.6]" --extra-index-url https://pytorc
 pip install setuptools-scm
 pip install --upgrade cmake
 # cd to your workdir
-git clone -b 0.6.6 https://github.com/analytics-zoo/vllm.git
+git clone -b 0.8.3 https://github.com/analytics-zoo/vllm.git
 cd vllm
-VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -v /llm/vllm
+pip install setuptools-scm==8.2.0 setuptools==78.1.0
+pip install --upgrade cmake
+pip install -v -r requirements/xpu.txt
+VLLM_TARGET_DEVICE=xpu python setup.py install
+pip install intel-extension-for-pytorch==2.6.10+xpu --extra-index-url=https://pytorch-extension.intel.com/release-whl/stable/xpu/cn/
+pip uninstall -y oneccl oneccl-devel
 # For Qwen model support
 pip install transformers_stream_generator einops tiktoken
 pip install ray
@@ -93,6 +98,8 @@ For vLLM, you can start the service using the following command:
 model="YOUR_MODEL_PATH"
 served_model_name="YOUR_MODEL_NAME"
 export VLLM_RPC_TIMEOUT=100000
+export VLLM_USE_V1=0
+export IPEX_LLM_LOWBIT=fp8
 
  # You may need to adjust the value of
  # --max-model-len, --max-num-batched-tokens, --max-num-seqs
@@ -107,7 +114,7 @@ python -m ipex_llm.vllm.xpu.entrypoints.openai.api_server \
   --device xpu \
   --dtype float16 \
   --enforce-eager \
-  --load-in-low-bit sym_int4 \
+  --load-in-low-bit $IPEX_LLM_LOWBIT \
   --max-model-len 4096 \
   --max-num-batched-tokens 10240 \
   --max-num-seqs 12 \

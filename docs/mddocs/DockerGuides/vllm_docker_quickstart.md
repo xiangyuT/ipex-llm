@@ -782,6 +782,9 @@ export USE_XETLA=OFF
 export SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=2
 export TORCH_LLM_ALLREDUCE=0
 
+export VLLM_USE_V1=0
+export IPEX_LLM_LOWBIT=fp8
+
 source /opt/intel/1ccl-wks/setvars.sh
 
 python -m ipex_llm.vllm.xpu.entrypoints.openai.api_server \
@@ -793,7 +796,7 @@ python -m ipex_llm.vllm.xpu.entrypoints.openai.api_server \
   --device xpu \
   --dtype float16 \
   --enforce-eager \
-  --load-in-low-bit fp8 \
+  --load-in-low-bit $IPEX_LLM_LOWBIT \
   --max-model-len 2048 \
   --max-num-batched-tokens 4000 \
   --api-key <your-api-key> \
