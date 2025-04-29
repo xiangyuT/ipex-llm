@@ -32,6 +32,8 @@ export TORCH_LLM_ALLREDUCE=0
 export CCL_SAME_STREAM=1
 export CCL_BLOCKING_WAIT=0
 
+export IPEX_LLM_LOWBIT=$LOAD_IN_LOW_BIT
+
 source /opt/intel/1ccl-wks/setvars.sh
 
 python -m ipex_llm.vllm.xpu.entrypoints.openai.api_server \

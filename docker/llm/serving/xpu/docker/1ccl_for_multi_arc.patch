@@ -1,7 +1,9 @@
-From d345631f78a2f33ff1ddd7d9908b288eb0afaf46 Mon Sep 17 00:00:00 2001
-From: Huajun Li <huajun.li@.com>
-Date: Fri, 24 May 2024 09:47:26 +0800
-Subject: [PATCH 1/3] allreduce optimization with LL256 for Arc770 dGPU
+From dfe1851b59df6859829b447353307b7c916ccee0 Mon Sep 17 00:00:00 2001
+From: junhansh <junhan.shi@intel.com>
+Date: Mon, 28 Apr 2025 23:33:11 +0800
+Subject: [PATCH] oneccl for Arc770 V2025.0.0.6.7
+
+allreduce optimization with LL256 for Arc770 dGPU
 
 To enable this feature, please set env var:
     export CCL_DG2_ALLREDUCE=1
@@ -12,6 +14,15 @@ Build:
     3. cmake .. -GNinja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_CXX_FLAGS="-fsycl" -DCOMPUTE_BACKEND=dpcpp  -DCMAKE_BUILD_TYPE=MinSizeRel
     4. ninja
     5. ls -al src/libccl*
+
+Changes:
+optimize req_workgroup calculate
+
+Revert "optimize req_workgroup calculate" for hang issue
+
+This reverts commit 20bfd0e0a37f93dfb8bb9c092cd5a0b35e868bfa.
+
+fix_fdset_buffer_overflow_issue
 ---
  src/CMakeLists.txt               |   2 +
  src/coll/coll.cpp                |  30 +-
@@ -20,9 +31,9 @@ Build:
  src/common/env/env.cpp           |   1 +
  src/common/env/env.hpp           |   1 +
  src/common/env/vars.hpp          |   1 +
- src/dg2/dg2_allreduce.cpp        | 642 +++++++++++++++++++++++++++++++
+ src/dg2/dg2_allreduce.cpp        | 640 +++++++++++++++++++++++++++++++
  src/dg2/dg2_allreduce.hpp        |  13 +
- 9 files changed, 693 insertions(+), 3 deletions(-)
+ 9 files changed, 691 insertions(+), 3 deletions(-)
  create mode 100644 src/dg2/dg2_allreduce.cpp
  create mode 100644 src/dg2/dg2_allreduce.hpp
 
@@ -163,10 +174,10 @@ index 73dcf77..84ab518 100644
  constexpr const char* CCL_MIN_CHUNK_SIZE = "CCL_MIN_CHUNK_SIZE";
 diff --git a/src/dg2/dg2_allreduce.cpp b/src/dg2/dg2_allreduce.cpp
 new file mode 100644
-index 0000000..15ace74
+index 0000000..73e114b
 --- /dev/null
 +++ b/src/dg2/dg2_allreduce.cpp
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,640 @@
 +#include <fcntl.h>
 +#include <unistd.h>
 +#include <sys/un.h>
@@ -178,7 +189,7 @@ index 0000000..15ace74
 +#include <drm/drm.h>
 +
 +#include <mpi.h>
-+
++#include <poll.h>
 +#include <vector>
 +#include <sstream>
 +#include <iostream>
@@ -315,7 +326,6 @@ index 0000000..15ace74
 +
 +static void *thread_func(void *arg)
 +{
-+    fd_set fds;
 +    int count = 0;
 +    char sock_path[64];
 +    int peer_buf_fd = 0;
@@ -323,6 +333,10 @@ index 0000000..15ace74
 +
 +    snprintf(sock_path, sizeof(sock_path), "%s-%d_%d", SOCK_PATH, rank, 0xa770);
 +    int srv_fd = srv_sock(sock_path);
++    if (srv_fd < 0) {
++         perror("srv_sock failed");
++	 return nullptr;
++    }
 +
 +    //std::cout << "-----> srv_fd of " << sock_path << " : " << srv_fd << "\n";
 +
@@ -331,35 +345,30 @@ index 0000000..15ace74
 +    ze_context_handle_t ze_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_context);
 +    ze_device_handle_t  ze_device = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
 +
-+    FD_ZERO(&fds);
-+    FD_SET(srv_fd, &fds);
++    struct pollfd pfd = {
++            .fd = srv_fd,
++            .events = POLL_IN,
++            .revents = 0
++    };
 +    while (++count < world_size) {
-+        int ret = select(srv_fd + 1, &fds, NULL, NULL, NULL);
-+        switch (ret) {
-+        case 1:
-+            {
-+                int peer_rank;
-+                void *peer_buf;
++        int ret = poll(&pfd, 1, -1);
++        if (ret <= 0) {
++	   std::cerr << "poll failed: " << strerror(errno) << "\n";
++	   break;
++        }
 +
-+                int conn_fd = accept(srv_fd, NULL, 0);
-+                ccl::utils::recvmsg_fd(conn_fd, &peer_buf_fd, &peer_rank, sizeof(peer_rank));
++        if (pfd.revents & POLL_IN) {
++           int peer_rank;
++	   void *peer_buf = nullptr;
 +
-+                ze_ipc_mem_handle_t ipc_handle_peer_buf = get_handle_from_fd(peer_buf_fd);
-+                zeMemOpenIpcHandle(ze_context, ze_device, ipc_handle_peer_buf, ZE_IPC_MEMORY_FLAG_BIAS_CACHED /* cached allocation */, &peer_buf);
++           int conn_fd = accept(srv_fd, NULL, 0);
++           ccl::utils::recvmsg_fd(conn_fd, &peer_buf_fd, &peer_rank, sizeof(peer_rank));
++           ze_ipc_mem_handle_t ipc_handle_peer_buf = get_handle_from_fd(peer_buf_fd);
++           zeMemOpenIpcHandle(ze_context, ze_device, ipc_handle_peer_buf, ZE_IPC_MEMORY_FLAG_BIAS_CACHED, &peer_buf);
 +
-+                peer_bufs[peer_rank] = peer_buf;
-+                //printf("<------------- rank: %d, peer_bufs[%d]: %p\n", world_rank, peer_rank, peer_bufs[peer_rank]);
-+
-+                if (conn_fd > 0) close(conn_fd);
-+
-+                break;
-+            }
-+        case 0:
-+        case -1:
-+            std::cout << "srv_fd select() failed" << "\n";
-+            break;
-+        default:
-+            break;
++           peer_bufs[peer_rank] = peer_buf;
++           //printf("<------------- rank: %d, peer_bufs[%d]: %p\n", world_rank, peer_rank, peer_bufs[peer_rank]);
++           if (conn_fd > 0) close(conn_fd);
 +        }
 +    }
 +
@@ -830,106 +839,4 @@ index 0000000..0506445
 +void dg2_clear();
 -- 
 2.34.1
-
-
-From 20bfd0e0a37f93dfb8bb9c092cd5a0b35e868bfa Mon Sep 17 00:00:00 2001
-From: Huajun Li <huajun.li@.com>
-Date: Fri, 7 Mar 2025 15:15:35 +0800
-Subject: [PATCH 2/3] optimize req_workgroup calculate
-
----
- src/dg2/dg2_allreduce.cpp | 25 ++-----------------------
- 1 file changed, 2 insertions(+), 23 deletions(-)
-
-diff --git a/src/dg2/dg2_allreduce.cpp b/src/dg2/dg2_allreduce.cpp
-index 15ace74..83270ae 100644
---- a/src/dg2/dg2_allreduce.cpp
-+++ b/src/dg2/dg2_allreduce.cpp
-@@ -527,30 +527,9 @@ ccl::event dg2_ll256_allreduce(const void *src, void *dst, size_t count,
-                 auto chunk_sz = req_workitems * LS_SZ;         /* LS_SZ bytes per work-item */
-                 auto chunk_with_pattern = sg_sz * LS_SZ;       /* aligned to 256B */
- 
--                /* items will be assigned to each rank */
--                auto per_rank_items = (unreduced + (local_world_size * LS_SZ - 1)) / (local_world_size * LS_SZ);
--                auto req_workgroups = (per_rank_items + (workgroup_available_items - 1)) / workgroup_available_items;
--                auto req_subgroups = 0;
--
--                if (req_workgroups >= g_sz/l_sz) {
--                    req_workgroups = g_sz/l_sz;
--                } else {
--                    if (group_id == (req_workgroups - 1)) {
--                        req_subgroups = (per_rank_items + (sg_sz - 1)) / (sg_sz - 1);
--
--                        /* (req_subgroups % (l_sz/sg_sz) - 1) equals to the final subgroup id in a workgroup */
--                        /* Note:  req_subgroups % (l_sz/sg_sz) might be 0 */
--                        if (((req_subgroups % (l_sz/sg_sz)) == 0) || (sg_id == (req_subgroups % (l_sz/sg_sz) - 1))) {
--                            if ((per_rank_items % (sg_sz - 1)) != 0) {
--                                /* FIXME: */
--                                req_workitems = per_rank_items % (sg_sz - 1);
--                                chunk_sz = req_workitems * LS_SZ;    /* LS_SZ bytes per work-item */
--                            }
--                        }
--                    }
--                }
-+		auto work_left = unreduced - sg_id * local_world_size * chunk_sz;
- 
--                if (group_id < req_workgroups) {
-+                if (work_left > 0) {
-                     // step 1: push data to next GPU
-                     {
-                         offset = base + local_world_rank * chunk_sz;
--- 
-2.34.1
-
-
-From 1c58cc9ede5ca38138a270f9e5ff59bca74f51d4 Mon Sep 17 00:00:00 2001
-From: Huajun Li <huajun.li@.com>
-Date: Wed, 12 Mar 2025 13:29:27 +0800
-Subject: [PATCH 3/3] Revert "optimize req_workgroup calculate" for hang issue
-
-This reverts commit 20bfd0e0a37f93dfb8bb9c092cd5a0b35e868bfa.
----
- src/dg2/dg2_allreduce.cpp | 25 +++++++++++++++++++++++--
- 1 file changed, 23 insertions(+), 2 deletions(-)
-
-diff --git a/src/dg2/dg2_allreduce.cpp b/src/dg2/dg2_allreduce.cpp
-index 83270ae..15ace74 100644
---- a/src/dg2/dg2_allreduce.cpp
-+++ b/src/dg2/dg2_allreduce.cpp
-@@ -527,9 +527,30 @@ ccl::event dg2_ll256_allreduce(const void *src, void *dst, size_t count,
-                 auto chunk_sz = req_workitems * LS_SZ;         /* LS_SZ bytes per work-item */
-                 auto chunk_with_pattern = sg_sz * LS_SZ;       /* aligned to 256B */
- 
--		auto work_left = unreduced - sg_id * local_world_size * chunk_sz;
-+                /* items will be assigned to each rank */
-+                auto per_rank_items = (unreduced + (local_world_size * LS_SZ - 1)) / (local_world_size * LS_SZ);
-+                auto req_workgroups = (per_rank_items + (workgroup_available_items - 1)) / workgroup_available_items;
-+                auto req_subgroups = 0;
-+
-+                if (req_workgroups >= g_sz/l_sz) {
-+                    req_workgroups = g_sz/l_sz;
-+                } else {
-+                    if (group_id == (req_workgroups - 1)) {
-+                        req_subgroups = (per_rank_items + (sg_sz - 1)) / (sg_sz - 1);
-+
-+                        /* (req_subgroups % (l_sz/sg_sz) - 1) equals to the final subgroup id in a workgroup */
-+                        /* Note:  req_subgroups % (l_sz/sg_sz) might be 0 */
-+                        if (((req_subgroups % (l_sz/sg_sz)) == 0) || (sg_id == (req_subgroups % (l_sz/sg_sz) - 1))) {
-+                            if ((per_rank_items % (sg_sz - 1)) != 0) {
-+                                /* FIXME: */
-+                                req_workitems = per_rank_items % (sg_sz - 1);
-+                                chunk_sz = req_workitems * LS_SZ;    /* LS_SZ bytes per work-item */
-+                            }
-+                        }
-+                    }
-+                }
- 
--                if (work_left > 0) {
-+                if (group_id < req_workgroups) {
-                     // step 1: push data to next GPU
-                     {
-                         offset = base + local_world_rank * chunk_sz;
--- 
-2.34.1
-
 
