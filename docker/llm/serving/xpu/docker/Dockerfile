@@ -184,10 +184,6 @@ RUN set -eux && \
     pip install mpi4py fastapi uvicorn openai && \
     pip install ray numba
 
-# Install ipex-llm, should remove before merge.
-RUN git clone -b vllm_083_0407 https://github.com/xiangyuT/ipex-llm.git /llm/ipex-llm && \
-    cp -r /llm/ipex-llm/python/llm/src/ipex_llm/vllm/xpu /usr/local/lib/python3.11/dist-packages/ipex_llm/vllm && \
-    cp /llm/ipex-llm/python/llm/src/ipex_llm/transformers/convert.py /usr/local/lib/python3.11/dist-packages/ipex_llm/transformers/convert.py
 
 WORKDIR /llm/
 ENTRYPOINT ["bash", "/llm/start-vllm-service.sh"]
