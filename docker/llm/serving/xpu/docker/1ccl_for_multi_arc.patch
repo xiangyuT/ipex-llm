@@ -1,9 +1,9 @@
-From dfe1851b59df6859829b447353307b7c916ccee0 Mon Sep 17 00:00:00 2001
-From: junhansh <junhan.shi@intel.com>
-Date: Mon, 28 Apr 2025 23:33:11 +0800
-Subject: [PATCH] oneccl for Arc770 V2025.0.0.6.7
+From 2124a4b48edccfb9363524850634c81a42e98c7e Mon Sep 17 00:00:00 2001
+From: YongZhuIntel <yong.zhu@intel.com>
+Date: Thu, 8 May 2025 10:31:36 +0800
+Subject: [PATCH] oneccl for BMG V2025.0.0.1.1
 
-allreduce optimization with LL256 for Arc770 dGPU
+allreduce optimization with LL256 for BMG dGPU
 
 To enable this feature, please set env var:
     export CCL_DG2_ALLREDUCE=1
@@ -22,18 +22,32 @@ Revert "optimize req_workgroup calculate" for hang issue
 
 This reverts commit 20bfd0e0a37f93dfb8bb9c092cd5a0b35e868bfa.
 
+enable BMG usm
+
+fix data overflow
+
+fix data ovrewrite for sum
+
+fix data over for special size 18186176
+
+enable p2p allreduce
+
 fix_fdset_buffer_overflow_issue
+
+control usm and p2p by env variable
+default is p2p,  enable usm:
+     export CCL_DG2_USM=1
 ---
  src/CMakeLists.txt               |   2 +
  src/coll/coll.cpp                |  30 +-
  src/coll/coll_param.cpp          |   1 +
  src/coll/selection/selection.cpp |   5 +
- src/common/env/env.cpp           |   1 +
- src/common/env/env.hpp           |   1 +
- src/common/env/vars.hpp          |   1 +
- src/dg2/dg2_allreduce.cpp        | 640 +++++++++++++++++++++++++++++++
+ src/common/env/env.cpp           |   2 +
+ src/common/env/env.hpp           |   2 +
+ src/common/env/vars.hpp          |   2 +
+ src/dg2/dg2_allreduce.cpp        | 689 +++++++++++++++++++++++++++++++
  src/dg2/dg2_allreduce.hpp        |  13 +
- 9 files changed, 691 insertions(+), 3 deletions(-)
+ 9 files changed, 743 insertions(+), 3 deletions(-)
  create mode 100644 src/dg2/dg2_allreduce.cpp
  create mode 100644 src/dg2/dg2_allreduce.hpp
 
@@ -137,47 +151,50 @@ index 5deae74..f4d9302 100644
          LOG_WARN("Applying topo algorithm, but device family is not recognized");
  #ifndef CCL_BF16_GPU_TRUNCATE
 diff --git a/src/common/env/env.cpp b/src/common/env/env.cpp
-index 11413cf..b00641c 100644
+index 11413cf..0c3f7d8 100644
 --- a/src/common/env/env.cpp
 +++ b/src/common/env/env.cpp
-@@ -468,6 +468,7 @@ void env_data::parse() {
+@@ -468,6 +468,8 @@ void env_data::parse() {
      }
      p.env_2_enum(CCL_STAGING_BUFFER, staging_buffer_names, staging_buffer);
      p.env_2_type(CCL_OP_SYNC, enable_op_sync);
 +    p.env_2_type(CCL_DG2_ALLREDUCE, enable_dg2_allreduce);
++    p.env_2_type(CCL_DG2_USM, enable_dg2_usm);
  
      p.env_2_type(CCL_CHUNK_COUNT, chunk_count);
      CCL_THROW_IF_NOT(chunk_count >= 1, "incorrect ", CCL_CHUNK_COUNT, " ", chunk_count);
 diff --git a/src/common/env/env.hpp b/src/common/env/env.hpp
-index baff33f..538d8e5 100644
+index baff33f..a5785e9 100644
 --- a/src/common/env/env.hpp
 +++ b/src/common/env/env.hpp
-@@ -177,6 +177,7 @@ public:
+@@ -177,6 +177,8 @@ public:
      bool enable_strict_order;
      ccl_staging_buffer staging_buffer;
      bool enable_op_sync;
 +    int enable_dg2_allreduce;
++    int enable_dg2_usm;
  
      size_t chunk_count;
      size_t min_chunk_size;
 diff --git a/src/common/env/vars.hpp b/src/common/env/vars.hpp
-index 73dcf77..84ab518 100644
+index 73dcf77..a1bc4ca 100644
 --- a/src/common/env/vars.hpp
 +++ b/src/common/env/vars.hpp
-@@ -579,6 +579,7 @@ constexpr const char* CCL_BUFFER_CACHE = "CCL_BUFFER_CACHE";
+@@ -579,6 +579,8 @@ constexpr const char* CCL_BUFFER_CACHE = "CCL_BUFFER_CACHE";
  constexpr const char* CCL_STRICT_ORDER = "CCL_STRICT_ORDER";
  constexpr const char* CCL_STAGING_BUFFER = "CCL_STAGING_BUFFER";
  constexpr const char* CCL_OP_SYNC = "CCL_OP_SYNC";
 +constexpr const char* CCL_DG2_ALLREDUCE = "CCL_DG2_ALLREDUCE";
++constexpr const char* CCL_DG2_USM = "CCL_DG2_USM";
  
  constexpr const char* CCL_CHUNK_COUNT = "CCL_CHUNK_COUNT";
  constexpr const char* CCL_MIN_CHUNK_SIZE = "CCL_MIN_CHUNK_SIZE";
 diff --git a/src/dg2/dg2_allreduce.cpp b/src/dg2/dg2_allreduce.cpp
 new file mode 100644
-index 0000000..73e114b
+index 0000000..5ea1793
 --- /dev/null
 +++ b/src/dg2/dg2_allreduce.cpp
-@@ -0,0 +1,640 @@
+@@ -0,0 +1,689 @@
 +#include <fcntl.h>
 +#include <unistd.h>
 +#include <sys/un.h>
@@ -202,6 +219,8 @@ index 0000000..73e114b
 +#include "common/utils/exchange_utils.hpp"
 +
 +#include "dg2_allreduce.hpp"
++
++#define XE_PLUS
 +
 +using namespace std;
 +using namespace sycl;
@@ -234,6 +253,8 @@ index 0000000..73e114b
 +    __asm__ __volatile__("lsc_load.ugm.uc.uc   (M1, 16)  %0:d32x4  flat[%1]:a64" : "=rw"(reinterpret_cast<typename message_t::vector_t &>(var)) : "rw"(addr) : "memory")
 +#define __LscLoadCachedVec(var, addr)   \
 +    __asm__ __volatile__("lsc_load.ugm.ca.ca   (M1, 16)  %0:d32x4  flat[%1]:a64" : "=rw"(reinterpret_cast<typename message_t::vector_t &>(var)) : "rw"(addr) : "memory")
++#define __LscLoadL3CachedVec(var, addr)   \
++    __asm__ __volatile__("lsc_load.ugm.uc.ca   (M1, 16)  %0:d32x4  flat[%1]:a64" : "=rw"(reinterpret_cast<typename message_t::vector_t &>(var)) : "rw"(addr) : "memory")
 +
 +#define __LscStoreUnCached(addr, var)  \
 +    __asm__ __volatile__("lsc_store.ugm.uc.uc  (M1, 16)  flat[%0]:a64  %1:d64" : : "rw"(addr), "rw"(var) : "memory")
@@ -246,6 +267,7 @@ index 0000000..73e114b
 +
 +#define LscLoadCached     __LscLoadCachedVec
 +#define LscLoadUnCached   __LscLoadUnCachedVec
++#define LscLoadL3Cached   __LscLoadL3CachedVec
 +#define LscStoreCached    __LscStoreCachedVec
 +#define LscStoreUnCached  __LscStoreUnCachedVec
 +
@@ -355,7 +377,7 @@ index 0000000..73e114b
 +        if (ret <= 0) {
 +	   std::cerr << "poll failed: " << strerror(errno) << "\n";
 +	   break;
-+        }
++	}
 +
 +        if (pfd.revents & POLL_IN) {
 +           int peer_rank;
@@ -382,7 +404,8 @@ index 0000000..73e114b
 +
 +void create_shared_buf(void *send_buf, void *recv_buf, size_t byte_count)
 +{
-+    printf("-----> current rank: %d, world size: %d, byte_count: %lu\n", world_rank, world_size, byte_count);
++    bool is_p2p = ccl::global_data::env().enable_dg2_usm ? false : true;
++    printf("-----> current rank: %d, world size: %d, byte_count: %lu,is_p2p:%d\n", world_rank, world_size, byte_count,is_p2p);
 +
 +    pthread_t tid;
 +    char sock_path[64];
@@ -395,7 +418,10 @@ index 0000000..73e114b
 +    pthread_create(&tid, nullptr, thread_func, &world_rank);
 +
 +    size_t buf_size = LL256_BUF_SIZE;
-+    host_buf = sycl::aligned_alloc_device(getpagesize(), buf_size, q);
++    if(is_p2p)
++        host_buf = sycl::aligned_alloc_device(getpagesize(), buf_size, q);
++    else
++        host_buf = sycl::aligned_alloc_host(getpagesize(), buf_size, q);
 +
 +    host_bufs[world_rank] = host_buf;
 +
@@ -485,7 +511,12 @@ index 0000000..73e114b
 +    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
 +
 +    do {
++#if defined(XE_PLUS)
++       LscLoadL3Cached(data, src + lid * sz);
++#else
 +        LscLoadUnCached(data, src + lid * sz);
++#endif
++
 +    } while (sycl::any_of_group(sg, ((lid ==  3) && (data[3] != pattern)) ||
 +                                    ((lid ==  7) && (data[3] != pattern)) ||
 +                                    ((lid == 11) && (data[3] != pattern)) ||
@@ -494,41 +525,68 @@ index 0000000..73e114b
 +
 +static inline void shuffle_data(message_t &data)
 +{
++#if defined(XE_PLUS)
++    __asm__ __volatile__("mov (M1, 1) %0(0, 15)<1> %0(3, 3)<0;1,0>\n"
++                         "mov (M1, 1) %0(1, 15)<1> %0(3, 7)<0;1,0>\n"
++                         "mov (M1, 1) %0(2, 15)<1> %0(3, 11)<0;1,0>\n"
++                         : "+rw"(reinterpret_cast<typename message_t::vector_t &>(data))
++                         : );
++#else
++
 +    __asm__ __volatile__("mov (M1, 1) %0(1, 7)<1> %0(6, 3)<0;1,0>\n"
 +                         "mov (M1, 1) %0(3, 7)<1> %0(6, 7)<0;1,0>\n"
 +                         "mov (M1, 1) %0(5, 7)<1> %0(7, 3)<0;1,0>\n"
 +                         : "+rw"(reinterpret_cast<typename message_t::vector_t &>(data))
 +                         : );
++#endif
 +}
 +
 +static inline void insert_pattern(message_t &data, pattern_t pattern)
 +{
++#if defined(XE_PLUS)
++    __asm__ __volatile__("mov (M1, 1) %0(3, 3)<1> %1(0, 0)<0;1,0>\n"
++                         "mov (M1, 1) %0(3, 7)<1> %1(0, 0)<0;1,0>\n"
++                         "mov (M1, 1) %0(3, 11)<1> %1(0, 0)<0;1,0>\n"
++                         "mov (M1, 1) %0(3, 15)<1> %1(0, 0)<0;1,0>\n"
++                         : "+rw"(reinterpret_cast<typename message_t::vector_t &>(data))
++                         : "rw"(pattern));
++#else
 +    __asm__ __volatile__("mov (M1, 1) %0(6, 3)<1> %1(0, 0)<0;1,0>\n"
 +                         "mov (M1, 1) %0(6, 7)<1> %1(0, 0)<0;1,0>\n"
 +                         "mov (M1, 1) %0(7, 3)<1> %1(0, 0)<0;1,0>\n"
 +                         "mov (M1, 1) %0(7, 7)<1> %1(0, 0)<0;1,0>\n"
 +                         : "+rw"(reinterpret_cast<typename message_t::vector_t &>(data))
 +                         : "rw"(pattern));
++#endif
 +}
 +
 +static inline void restore_data(message_t &data)
 +{
++#if defined(XE_PLUS)
++    __asm__ __volatile__("mov (M1, 1) %0(3, 3)<1> %0(0, 15)<0;1,0>\n"
++                         "mov (M1, 1) %0(3, 7)<1> %0(1, 15)<0;1,0>\n"
++                         "mov (M1, 1) %0(3, 11)<1> %0(2, 15)<0;1,0>\n"
++                         : "+rw"(reinterpret_cast<typename message_t::vector_t &>(data))
++                         : );
++#else
 +    __asm__ __volatile__("mov (M1, 1) %0(6, 3)<1> %0(1, 7)<0;1,0>\n"
 +                         "mov (M1, 1) %0(6, 7)<1> %0(3, 7)<0;1,0>\n"
 +                         "mov (M1, 1) %0(7, 3)<1> %0(5, 7)<0;1,0>\n"
 +                         : "+rw"(reinterpret_cast<typename message_t::vector_t &>(data))
 +                         : );
++#endif
 +}
 +#endif
 +
 +static inline void send(char *next, char *src, int lid, int req_workitems,
-+                        const ccl_datatype& dtype, int rank, pattern_t pattern)
++                        const ccl_datatype& dtype, int rank, pattern_t pattern,size_t left_size)
 +{
 +    #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
 +    message_t data;
 +    int sz = sizeof(data);
 +
-+    LscLoadCached(data, src + lid * sz);
++    if ((lid < req_workitems) && (lid * sz < left_size))
++        LscLoadCached(data, src + lid * sz);
 +
 +    shuffle_data(data);
 +    insert_pattern(data, pattern);
@@ -538,7 +596,7 @@ index 0000000..73e114b
 +}
 +
 +static inline void recv_reduce_send(char *dst, char *next, char *src, int lid, int req_workitems,
-+                                    const ccl_datatype& dtype, int rank, pattern_t pattern)
++                                    const ccl_datatype& dtype, int rank, pattern_t pattern,size_t left_size)
 +{
 +    #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
 +    message_t data;
@@ -548,7 +606,8 @@ index 0000000..73e114b
 +    sync_data(src, data, lid, pattern);
 +    restore_data(data);
 +
-+    data = sum(dst_buf[lid], data, dtype);
++    if ((lid < req_workitems) && (lid * sz < left_size))
++        data = sum(dst_buf[lid], data, dtype);
 +
 +    shuffle_data(data);
 +    insert_pattern(data, pattern);
@@ -557,7 +616,7 @@ index 0000000..73e114b
 +}
 +
 +static inline void recv_reduce_copy_send(char *dst, char *next, char *src, int lid, int req_workitems,
-+                                         const ccl_datatype& dtype, int rank, pattern_t pattern)
++                                         const ccl_datatype& dtype, int rank, pattern_t pattern,size_t left_size)
 +{
 +    #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
 +    message_t data;
@@ -567,8 +626,10 @@ index 0000000..73e114b
 +    sync_data(src, data, lid, pattern);
 +    restore_data(data);
 +
-+    data = sum(dst_buf[lid], data, dtype);
-+    if (lid < req_workitems)
++    if ((lid < req_workitems) && (lid * sz < left_size))
++        data = sum(dst_buf[lid], data, dtype);
++
++    if ((lid < req_workitems) && (lid * sz < left_size))
 +        LscStoreUnCached(dst + lid * sz, data);
 +
 +    shuffle_data(data);
@@ -578,7 +639,7 @@ index 0000000..73e114b
 +}
 +
 +static inline void recv_copy_send(char *dst, char *next, char *src, int lid, int req_workitems,
-+                                  const ccl_datatype& dtype, int rank, pattern_t pattern)
++                                  const ccl_datatype& dtype, int rank, pattern_t pattern,size_t left_size)
 +{
 +    #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
 +    message_t data;
@@ -589,13 +650,13 @@ index 0000000..73e114b
 +
 +    restore_data(data);
 +
-+    if (lid < req_workitems)
++    if ((lid < req_workitems) && (lid * sz < left_size))
 +        LscStoreUnCached(dst + lid * sz, data);
 +    #endif
 +}
 +
 +static inline void recv(char *dst, char *src, int lid, int req_workitems,
-+                        const ccl_datatype& dtype, int rank, pattern_t pattern)
++                        const ccl_datatype& dtype, int rank, pattern_t pattern,size_t left_size)
 +{
 +    #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
 +    message_t data;
@@ -606,7 +667,7 @@ index 0000000..73e114b
 +
 +    restore_data(data);
 +
-+    if (lid < req_workitems)
++    if ((lid < req_workitems) && (lid * sz < left_size))
 +        LscStoreUnCached(dst + lid * sz, data);
 +    #endif
 +}
@@ -736,7 +797,8 @@ index 0000000..73e114b
 +
 +                        char *next = local_peer_bufs[next_rank];
 +
-+                        send(next + offset_with_pattern, send_buf + offset, sg_lid, req_workitems, dtype, local_world_rank, pattern);
++			size_t left_size = count * dt_sz - offset;
++                        send(next + offset_with_pattern, send_buf + offset, sg_lid, req_workitems, dtype, local_world_rank, pattern,left_size);
 +                    }
 +
 +                    // step 2: reduce and copy to next GPU
@@ -748,8 +810,9 @@ index 0000000..73e114b
 +                        char *src = local_host_buf;
 +                        char *next = local_peer_bufs[next_rank];
 +
++			size_t left_size = count * dt_sz - offset;
 +                        recv_reduce_send(recv_buf + offset, next + offset_with_pattern, src + offset_with_pattern,
-+                                         sg_lid, req_workitems, dtype, local_world_rank, pattern);
++                                         sg_lid, req_workitems, dtype, local_world_rank, pattern,left_size);
 +                    }
 +
 +                    // step 3: reduce this buffer and data, which will produce the final
@@ -762,8 +825,9 @@ index 0000000..73e114b
 +                        char *src = local_host_buf;
 +                        char *next = local_peer_bufs[next_rank];
 +
++                        size_t left_size = count * dt_sz - offset;
 +                        recv_reduce_copy_send(recv_buf + offset, next + GATHER_BUF_OFFSET + offset_with_pattern, src + offset_with_pattern,
-+                                              sg_lid, req_workitems, dtype, local_world_rank, pattern);
++                                              sg_lid, req_workitems, dtype, local_world_rank, pattern,left_size);
 +                    }
 +
 +                    // step 4: copy to next GPU
@@ -775,8 +839,9 @@ index 0000000..73e114b
 +                        char *src = local_host_buf;
 +                        char *next = local_peer_bufs[next_rank];
 +
++			size_t left_size = count * dt_sz - offset;
 +                        recv_copy_send(recv_buf + offset, next + offset_with_pattern, src + offset_with_pattern,
-+                                       sg_lid, req_workitems, dtype, local_world_rank, pattern);
++                                       sg_lid, req_workitems, dtype, local_world_rank, pattern,left_size);
 +                    }
 +
 +                    // step 5: Make final copy from buffer to dest
@@ -787,7 +852,8 @@ index 0000000..73e114b
 +
 +                        char *src = local_host_buf;
 +
-+                        recv(recv_buf + offset, src + offset_with_pattern, sg_lid, req_workitems, dtype, local_world_rank, pattern);
++			size_t left_size = count * dt_sz - offset;
++                        recv(recv_buf + offset, src + offset_with_pattern, sg_lid, req_workitems, dtype, local_world_rank, pattern,left_size);
 +                    }
 +                }
 +            }
@@ -838,5 +904,5 @@ index 0000000..0506445
 +
 +void dg2_clear();
 -- 
-2.34.1
+2.25.1
 
