@@ -193,6 +193,8 @@ RUN set -eux && \
     cd /usr/lib/x86_64-linux-gnu && \
     ln -s libze_loader.so.1 libze_loader.so
 
+# Set environment variables to force use batch_forward_new()
+ENV IPEX_LLM_FORCE_BATCH_FORWARD=1
 
 WORKDIR /llm/
 ENTRYPOINT ["bash", "/llm/start-vllm-service.sh"]
