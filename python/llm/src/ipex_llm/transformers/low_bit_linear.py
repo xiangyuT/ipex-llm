@@ -273,7 +273,7 @@ def use_batch_forward(x: torch.Tensor, qtype: int, output_len: int):
     device_name = get_xpu_device_name(x.device)
     batch_size = x.shape[0]
     hard_condition = (
-        x.dtype in [torch.float, torch.half]
+        x.dtype in [torch.half]
         and x.shape[1] % 128 == 0
         and (
             (
@@ -875,7 +875,7 @@ class BF16Linear(nn.Linear):
 
 class vLLMLowBitLinear(LowBitLinear):
     def __init__(self, input_features, output_features, qtype, bias=True,
-                 conver_to_half=True, mp_group=None,
+                 conver_to_half=False, mp_group=None,
                  optimize_lm_head=False, act_order=False,
                  enable_scale_search=False):
         super().__init__(input_features, output_features, qtype, bias, conver_to_half, mp_group,

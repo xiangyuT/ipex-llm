@@ -145,6 +145,7 @@ def get_load_function(low_bit):
 
         self.model_memory_usage = m.consumed_memory
         logger = init_logger(__name__)
+        logger.info(self.model)
         logger.info("Loading model weights took %.4f GB",
                     self.model_memory_usage / float(2**30))
 

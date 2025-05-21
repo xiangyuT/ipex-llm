@@ -293,6 +293,7 @@ def convert_vllm(module, qtype, in_features, out_features, mp_group, cur_qtype,
                 mp_group=mp_group,
                 optimize_lm_head=optimize_lm_head,
                 enable_scale_search=enable_scale_search,
+                conver_to_half=False,
             )
     return new_linear
 
@@ -589,6 +590,7 @@ def _replace_with_low_bit_linear(model, qtype, modules_to_not_convert=None,
                             optimize_lm_head=False,
                             act_order=act_order,
                             enable_scale_search=enable_scale_search,
+                            conver_to_half=False,
                         )
                         device = module.qweight.data.device
                         invalidInputError(device.type != "meta",
