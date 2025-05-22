@@ -191,7 +191,8 @@ RUN set -eux && \
     pip install ray numba && \
     # Link libze_loader.so
     cd /usr/lib/x86_64-linux-gnu && \
-    ln -s libze_loader.so.1 libze_loader.so
+    ln -s libze_loader.so.1 libze_loader.so && \
+    sed -i 's/qtype = ggml_tensor_qtype\["woq_int4"\]/qtype = ggml_tensor_qtype["sym_int4"]/' /usr/local/lib/python3.11/dist-packages/ipex_llm/transformers/convert.py
 
 # Set environment variables to force use batch_forward_new()
 ENV IPEX_LLM_FORCE_BATCH_FORWARD=1
