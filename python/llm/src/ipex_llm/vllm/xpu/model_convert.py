@@ -30,7 +30,8 @@ from vllm.attention import AttentionMetadata
 from vllm.config import DeviceConfig
 from typing import Tuple
 from ipex_llm.transformers.low_bit_linear import LowBitLinear
-
+import os
+logger = init_logger(__name__)
 
 def _sample_get_logits(
     self,
@@ -63,8 +64,11 @@ def _model_sample_convert():
 
 
 def _ipex_llm_convert(load_in_low_bit):
-    # import pdb
-    # pdb.set_trace()
+    if load_in_low_bit == "fp16":
+        logger.warning("Bypass ipex_llm convert for fp16, "
+                       "as it is already supported by vLLM.")
+        os.environ.pop("IPEX_LLM_LOWBIT", None)
+        return
     from vllm.worker.xpu_model_runner import XPUModelRunner, XPUModelRunnerBase
     from ipex_llm.vllm.xpu.ipex_llm_wrapper import get_ipex_llm_wrapper
     from ipex_llm.vllm.xpu.ipex_llm_v1_wrapper import get_ipex_llm_v1_wrapper
@@ -150,7 +154,6 @@ def get_load_function(low_bit):
                                        dtype=self.vllm_config.model_config.dtype)
 
         self.model_memory_usage = m.consumed_memory
-        logger = init_logger(__name__)
         logger.info("Loading model weights took %.4f GB",
                     self.model_memory_usage / float(2**30))
 
