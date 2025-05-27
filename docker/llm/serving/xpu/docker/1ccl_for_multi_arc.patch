@@ -1,7 +1,7 @@
-From 18916acd35d2a6797d5b6371d949cf3a0c660085 Mon Sep 17 00:00:00 2001
+From 2fe4be50d6b50d0d948d4d690eefa63f29bb08c8 Mon Sep 17 00:00:00 2001
 From: YongZhuIntel <yong.zhu@intel.com>
-Date: Mon, 12 May 2025 14:50:08 +0800
-Subject: [PATCH] oneccl for BMG V2025.0.0.1.2
+Date: Mon, 26 May 2025 15:11:44 +0800
+Subject: [PATCH] oneccl for BMG V2025.0.0.1.3
 
 allreduce optimization with LL256 for BMG dGPU
 
@@ -16,7 +16,6 @@ Build:
     5. ls -al src/libccl*
 
 Changes:
-
 optimize req_workgroup calculate
 
 Revert "optimize req_workgroup calculate" for hang issue
@@ -45,7 +44,11 @@ enable sycl path
 move to sycl path (CCL_WORKER_COUNT must be 1)
 
 modify print to log warn
+
+print bandwidth in benchmark
 ---
+ examples/benchmark/include/benchmark.hpp     |  28 +-
+ examples/benchmark/src/benchmark.cpp         |   7 +-
  src/CMakeLists.txt                           |   2 +
  src/coll/algorithms/utils/sycl_selection.cpp |   8 +-
  src/coll/coll.cpp                            |  36 +-
@@ -56,10 +59,101 @@ modify print to log warn
  src/common/env/vars.hpp                      |   2 +
  src/dg2/dg2_allreduce.cpp                    | 690 +++++++++++++++++++
  src/dg2/dg2_allreduce.hpp                    |  13 +
- 10 files changed, 755 insertions(+), 6 deletions(-)
+ 12 files changed, 784 insertions(+), 12 deletions(-)
  create mode 100644 src/dg2/dg2_allreduce.cpp
  create mode 100644 src/dg2/dg2_allreduce.hpp
 
+diff --git a/examples/benchmark/include/benchmark.hpp b/examples/benchmark/include/benchmark.hpp
+index 1df9e97..584a1a3 100644
+--- a/examples/benchmark/include/benchmark.hpp
++++ b/examples/benchmark/include/benchmark.hpp
+@@ -373,7 +373,9 @@ void store_to_csv(const user_options_t& options,
+                   double max_time,
+                   double avg_time,
+                   double stddev,
+-                  double wait_avg_time) {
++                  double wait_avg_time,
++		  double algbw,
++		  double busbw) {
+     std::ofstream csvf;
+     csvf.open(options.csv_filepath, std::ofstream::out | std::ofstream::app);
+ 
+@@ -392,7 +394,7 @@ void store_to_csv(const user_options_t& options,
+                  << "," << ccl::get_datatype_size(dtype) << "," << elem_count << ","
+                  << ccl::get_datatype_size(dtype) * elem_count << "," << buf_count << ","
+                  << iter_count << "," << min_time << "," << max_time << "," << avg_time << ","
+-                 << stddev << "," << wait_avg_time << std::endl;
++                 << stddev << "," << wait_avg_time << "," << algbw << "," << busbw << std::endl;
+         }
+         csvf.close();
+     }
+@@ -468,13 +470,29 @@ void print_timings(const ccl::communicator& comm,
+         max_time /= iter_count;
+ 
+         size_t bytes = elem_count * ccl::get_datatype_size(dtype) * buf_count;
++
++        double algbw = bytes/total_avg_time/1024/1024*1000;
++
++	double busbw = algbw;
++        if (ncolls == 1) {
++            if (options.coll_names.front() == "allreduce") {
++                busbw = algbw * 2 * (nranks -1) / nranks;
++	    } else if (options.coll_names.front() == "allgather" ||
++	        options.coll_names.front() == "reducescatter" ||
++		options.coll_names.front() == "alltoall") {
++                busbw = algbw * (nranks -1) / nranks;
++	    }
++        }
++
+         std::stringstream ss;
+         ss << std::right << std::fixed << std::setw(COL_WIDTH) << bytes << std::setw(COL_WIDTH)
+            << elem_count * buf_count << std::setw(COL_WIDTH) << iter_count << std::setw(COL_WIDTH)
+            << std::setprecision(COL_PRECISION) << min_time << std::setw(COL_WIDTH)
+            << std::setprecision(COL_PRECISION) << max_time << std::setw(COL_WIDTH)
+            << std::setprecision(COL_PRECISION) << total_avg_time << std::setw(COL_WIDTH - 3)
+-           << std::setprecision(COL_PRECISION) << stddev << std::setw(COL_WIDTH + 3);
++           << std::setprecision(COL_PRECISION) << stddev << std::setw(COL_WIDTH)
++	   << std::setprecision(COL_PRECISION) << algbw << std::setw(COL_WIDTH)
++	   << std::setprecision(COL_PRECISION) << busbw << std::setw(COL_WIDTH + 3);
+ 
+         if (show_extened_info(options.show_additional_info)) {
+             ss << std::right << std::fixed << std::setprecision(COL_PRECISION) << wait_avg_time;
+@@ -493,7 +511,9 @@ void print_timings(const ccl::communicator& comm,
+                          max_time,
+                          total_avg_time,
+                          stddev,
+-                         wait_avg_time);
++                         wait_avg_time,
++			 algbw,
++			 busbw);
+         }
+     }
+ 
+diff --git a/examples/benchmark/src/benchmark.cpp b/examples/benchmark/src/benchmark.cpp
+index a657eb4..765a44e 100644
+--- a/examples/benchmark/src/benchmark.cpp
++++ b/examples/benchmark/src/benchmark.cpp
+@@ -105,7 +105,8 @@ void run(ccl::communicator& service_comm,
+                    << "#elem_count" << std::setw(COL_WIDTH) << "#repetitions"
+                    << std::setw(COL_WIDTH) << "t_min[usec]" << std::setw(COL_WIDTH) << "t_max[usec]"
+                    << std::setw(COL_WIDTH) << "t_avg[usec]" << std::setw(COL_WIDTH - 3)
+-                   << "stddev[%]";
++                   << "stddev[%]" << std::setw(COL_WIDTH) << "algbw[GB/s]" << std::setw(COL_WIDTH)
++		   << "busbw[GB/s]";
+ 
+                 if (show_extened_info(options.show_additional_info)) {
+                     ss << std::right << std::setw(COL_WIDTH + 3) << "wait_t_avg[usec]";
+@@ -425,7 +426,9 @@ int main(int argc, char* argv[]) {
+              << "t_max[usec],"
+              << "t_avg[usec],"
+              << "stddev[%],"
+-             << "wait_t_avg[usec]" << std::endl;
++             << "wait_t_avg[usec],"
++             << "algbw[GB/s],"
++             << "busbw[GB/s]" << std::endl;
+         csvf.close();
+     }
+ 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index c1f2483..82cbf22 100644
 --- a/src/CMakeLists.txt
