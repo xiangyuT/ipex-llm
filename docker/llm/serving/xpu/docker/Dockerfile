@@ -196,6 +196,7 @@ RUN set -eux && \
 
 # Set environment variables to force use batch_forward_new()
 ENV IPEX_LLM_FORCE_BATCH_FORWARD=1
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages:${LD_LIBRARY_PATH}
 
 WORKDIR /llm/
 ENTRYPOINT ["bash", "/llm/start-vllm-service.sh"]
