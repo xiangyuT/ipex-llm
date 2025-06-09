@@ -49,9 +49,9 @@ def _sample_get_logits(
         if embedding_bias is not None:
             logits += embedding_bias
     if self.use_all_gather:
-        logits = tensor_model_parallel_gather(logits)
-    else:
         logits = tensor_model_parallel_all_gather(logits)
+    else:
+        logits = tensor_model_parallel_gather(logits)
     if logits is not None:
         logits = logits[:, : self.org_vocab_size]
     return logits
